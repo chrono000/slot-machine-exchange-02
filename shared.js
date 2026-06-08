@@ -596,6 +596,134 @@ window.FlowBanner = function FlowBanner(props) {
   );
 };
 
+// ── Shared verification primitives ───────────────────────────────────────────
+// Single home for the 6-digit code input and the chained (email → authenticator)
+// verification modal, reused by Settings (disable 2FA, change password) and the
+// API page (create / revoke keys). Demo codes live here so there's one source.
+window.HX_CODES = { email: "654321", twoFa: "123456" };
+
+function injectHxvCSS() {
+  if (document.getElementById("hxv-styles")) return;
+  var st = document.createElement("style");
+  st.id = "hxv-styles";
+  st.textContent =
+    ".hxv-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.6);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;z-index:1000;padding:16px;animation:hxvFade 180ms ease}" +
+    "@keyframes hxvFade{from{opacity:0}to{opacity:1}}" +
+    ".hxv-modal{position:relative;width:100%;max-width:380px;background:rgba(16,16,22,.96);border:1px solid rgba(255,255,255,.1);border-radius:16px;padding:22px;box-shadow:0 24px 80px rgba(0,0,0,.5);font-family:'JetBrains Mono',ui-monospace,monospace}" +
+    ".hxv-close{position:absolute;top:14px;right:14px;background:none;border:none;color:rgba(255,255,255,.4);cursor:pointer;font-size:14px}" +
+    ".hxv-title{font-size:16px;font-weight:700;text-align:center;color:rgba(255,255,255,.9)}" +
+    ".hxv-sub{font-size:12px;color:rgba(255,255,255,.45);text-align:center;margin-top:6px;line-height:1.6}" +
+    ".hxv-dots{display:flex;gap:8px;justify-content:center;align-items:center;margin-top:10px}" +
+    ".hxv-dot{width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700}" +
+    ".hxv-code-row{display:flex;gap:6px;justify-content:center;margin:18px 0 4px}" +
+    ".hxv-code-input{width:36px;height:44px;text-align:center;font-family:'JetBrains Mono',monospace;font-size:18px;font-weight:700;color:rgba(255,255,255,.9);background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.12);border-radius:8px;outline:none;transition:border-color 150ms}" +
+    ".hxv-code-input:focus{border-color:rgba(99,102,241,.6)}" +
+    "@media(max-width:480px){.hxv-code-input{width:30px;height:40px;font-size:15px}}";
+  document.head.appendChild(st);
+}
+
+// 6-digit boxed code input. props: expected, onVerified, label.
+window.HxCodeInput = function HxCodeInput(props) {
+  var p = props || {};
+  var expected = p.expected, onVerified = p.onVerified, label = p.label || "Verified";
+  var cs = React.useState(["", "", "", "", "", ""]); var code = cs[0], setCode = cs[1];
+  var es = React.useState("");    var error = es[0], setError = es[1];
+  var oks = React.useState(false); var ok = oks[0], setOk = oks[1];
+  var refs = React.useRef([]);
+  var resetT = React.useRef(null);
+  React.useEffect(function () { return function () { if (resetT.current) clearTimeout(resetT.current); }; }, []);
+
+  function tryVerify(digits) {
+    var full = digits.join("");
+    if (full.length < 6) return;
+    if (full !== expected) {
+      setError("Incorrect code. Try again.");
+      resetT.current = setTimeout(function () {
+        setCode(["", "", "", "", "", ""]); setError("");
+        if (refs.current[0]) refs.current[0].focus();
+      }, 800);
+      return;
+    }
+    setOk(true);
+    setTimeout(function () { if (onVerified) onVerified(); }, 450);
+  }
+  function onChange(i, v) {
+    if (ok) return;
+    if (v.length > 1) v = v.slice(-1);
+    if (v && !/^\d$/.test(v)) return;
+    setError("");
+    var next = code.slice(); next[i] = v; setCode(next);
+    if (v && i < 5 && refs.current[i + 1]) refs.current[i + 1].focus();
+    if (v && i === 5) tryVerify(next);
+  }
+  function onKey(i, e) {
+    if (!ok && e.key === "Backspace" && !code[i] && i > 0 && refs.current[i - 1]) refs.current[i - 1].focus();
+  }
+  function onPaste(e) {
+    if (ok) return;
+    e.preventDefault();
+    var pasted = (e.clipboardData.getData("text") || "").replace(/\D/g, "").slice(0, 6);
+    if (!pasted) return;
+    var next = code.slice();
+    for (var i = 0; i < 6; i++) next[i] = pasted[i] || "";
+    setCode(next);
+    if (pasted.length === 6) tryVerify(next);
+    else if (refs.current[Math.min(pasted.length, 5)]) refs.current[Math.min(pasted.length, 5)].focus();
+  }
+  var style = ok ? { borderColor: "rgba(74,222,128,.5)", color: "rgba(74,222,128,.9)" }
+            : error ? { borderColor: "rgba(248,113,113,.6)" } : {};
+  return React.createElement("div", null,
+    React.createElement("div", { className: "hxv-code-row", onPaste: onPaste },
+      code.map(function (d, i) {
+        return React.createElement("input", {
+          key: i,
+          ref: function (el) { refs.current[i] = el; },
+          className: "hxv-code-input",
+          type: "text", inputMode: "numeric", maxLength: 1, value: d, disabled: ok,
+          autoFocus: i === 0, style: style,
+          onChange: function (e) { onChange(i, e.target.value); },
+          onKeyDown: function (e) { onKey(i, e); },
+        });
+      })
+    ),
+    error ? React.createElement("div", { style: { textAlign: "center", fontSize: 11, color: "rgba(248,113,113,.85)", marginTop: 6 } }, error) : null,
+    ok ? React.createElement("div", { style: { textAlign: "center", fontSize: 12, color: "rgba(74,222,128,.85)", marginTop: 8, fontWeight: 600 } }, "✓ " + label) : null
+  );
+};
+
+// Chained verify modal: email code → authenticator code → onVerified().
+// props: title, onVerified, onClose, codes (defaults to window.HX_CODES).
+window.HxChainedVerify = function HxChainedVerify(props) {
+  var p = props || {};
+  injectHxvCSS();
+  var codes = p.codes || window.HX_CODES;
+  var ss = React.useState(1); var step = ss[0], setStep = ss[1];
+  function dot(n) {
+    return step > n ? { background: "rgba(74,222,128,.15)", color: "rgba(74,222,128,.8)", border: "1px solid rgba(74,222,128,.25)" }
+         : step === n ? { background: "rgba(99,102,241,.2)", color: "rgba(99,102,241,.9)", border: "1px solid rgba(99,102,241,.35)" }
+         : { background: "rgba(255,255,255,.04)", color: "rgba(255,255,255,.2)", border: "1px solid rgba(255,255,255,.06)" };
+  }
+  return React.createElement("div", { className: "hxv-backdrop", onClick: p.onClose },
+    React.createElement("div", { className: "hxv-modal", onClick: function (e) { e.stopPropagation(); } },
+      React.createElement("button", { className: "hxv-close", onClick: p.onClose }, "✕"),
+      React.createElement("div", { className: "hxv-title" }, p.title || "Confirm It's You"),
+      React.createElement("div", { className: "hxv-sub" },
+        step === 1 ? "Step 1 of 2 · Enter the 6-digit code we emailed you"
+                   : "Step 2 of 2 · Enter the code from your authenticator app"),
+      React.createElement("div", { className: "hxv-dots" },
+        React.createElement("span", { className: "hxv-dot", style: dot(1) }, step > 1 ? "✓" : "✉"),
+        React.createElement("span", { style: { color: "rgba(255,255,255,.18)" } }, "—"),
+        React.createElement("span", { className: "hxv-dot", style: dot(2) }, "🔑")
+      ),
+      step === 1
+        ? React.createElement(window.HxCodeInput, { key: "email", expected: codes.email, label: "Email verified", onVerified: function () { setStep(2); } })
+        : React.createElement(window.HxCodeInput, { key: "2fa", expected: codes.twoFa, label: "Verified", onVerified: p.onVerified }),
+      React.createElement("div", { style: { textAlign: "center", marginTop: 12, fontSize: 10, color: "rgba(255,255,255,.25)" } },
+        "Demo · email " + codes.email + " · authenticator " + codes.twoFa)
+    )
+  );
+};
+
 // ── Global mobile / touch polish ──
 (function injectMobileCSS() {
   if (document.getElementById("hx-mobile-css")) return;

@@ -1410,87 +1410,9 @@ function TwoFaCodeInput({ onVerified, validate, successLabel = "Code verified" }
   );
 }
 
-// Reusable 2FA verification gate modal
-function TwoFaVerifyModal({ title, subtitle, onVerified, onClose }) {
-  return (
-    <div className="st-kyc-backdrop" onClick={onClose}>
-      <div className="st-kyc-modal" style={{ position: "relative" }} onClick={e => e.stopPropagation()}>
-        <button className="st-kyc-close" onClick={onClose}>✕</button>
-        <div className="st-kyc-header">
-          <div className="st-kyc-badge">
-            <div className="st-kyc-badge-icon" style={{ background: "rgba(99,102,241,.2)", color: "rgba(99,102,241,.9)" }}>🔒</div>
-            <span className="st-kyc-badge-text" style={{ color: "rgba(99,102,241,.8)" }}>VERIFY</span>
-          </div>
-          <div className="st-kyc-title">{title || "Confirm Two-Factor Code"}</div>
-          <div className="st-kyc-sub">{subtitle || "Enter the 6-digit code from your authenticator app"}</div>
-        </div>
-        <div style={{ padding: "16px 20px 20px" }}>
-          <TwoFaCodeInput onVerified={onVerified} successLabel="Verified" />
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// Demo codes for the chained verification flow (email + authenticator).
-const MOCK_EMAIL_CODE = "654321";
-const MOCK_2FA_CODE   = "123456";
-
-// Chained verification gate: email code first, then authenticator code.
-// Used for high-sensitivity actions (disable 2FA, change password, API keys).
-function ChainedVerifyModal({ title, onVerified, onClose }) {
-  const [step, setStep] = useState(1); // 1 = email code, 2 = authenticator code
-
-  const stepDot = (n) =>
-    step > n  ? { background: "rgba(74,222,128,.15)", color: "rgba(74,222,128,.8)", border: "1px solid rgba(74,222,128,.25)" } :
-    step === n ? { background: "rgba(99,102,241,.2)", color: "rgba(99,102,241,.9)", border: "1px solid rgba(99,102,241,.35)" } :
-                 { background: "rgba(255,255,255,.04)", color: "rgba(255,255,255,.2)", border: "1px solid rgba(255,255,255,.06)" };
-
-  return (
-    <div className="st-kyc-backdrop" onClick={onClose}>
-      <div className="st-kyc-modal" style={{ position: "relative" }} onClick={e => e.stopPropagation()}>
-        <button className="st-kyc-close" onClick={onClose}>✕</button>
-        <div className="st-kyc-header">
-          <div className="st-kyc-badge">
-            <div className="st-kyc-badge-icon" style={{ background: "rgba(99,102,241,.2)", color: "rgba(99,102,241,.9)" }}>🔒</div>
-            <span className="st-kyc-badge-text" style={{ color: "rgba(99,102,241,.8)" }}>VERIFY</span>
-          </div>
-          <div className="st-kyc-title">{title || "Confirm It's You"}</div>
-          <div className="st-kyc-sub">
-            {step === 1
-              ? "Step 1 of 2 · Enter the 6-digit code we emailed you"
-              : "Step 2 of 2 · Enter the code from your authenticator app"}
-          </div>
-        </div>
-        <div style={{ display: "flex", gap: 8, justifyContent: "center", margin: "4px 0 2px" }}>
-          <span className="st-2fa-step-num" style={{ ...stepDot(1), width: 24, height: 24, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700 }}>{step > 1 ? "✓" : "✉"}</span>
-          <span style={{ alignSelf: "center", color: "rgba(255,255,255,.18)" }}>—</span>
-          <span className="st-2fa-step-num" style={{ ...stepDot(2), width: 24, height: 24, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700 }}>🔑</span>
-        </div>
-        <div style={{ padding: "16px 20px 20px" }}>
-          {step === 1 ? (
-            <TwoFaCodeInput
-              key="email"
-              validate={d => d === MOCK_EMAIL_CODE}
-              successLabel="Email verified"
-              onVerified={() => setStep(2)}
-            />
-          ) : (
-            <TwoFaCodeInput
-              key="2fa"
-              validate={d => d === MOCK_2FA_CODE}
-              successLabel="Verified"
-              onVerified={onVerified}
-            />
-          )}
-          <div style={{ textAlign: "center", marginTop: 12, fontSize: 10, color: "rgba(255,255,255,.25)" }}>
-            Demo · email code {MOCK_EMAIL_CODE} · authenticator {MOCK_2FA_CODE}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
+// Chained verification gate (email code → authenticator code) lives in shared.js
+// so Settings and the API page share one implementation. Alias keeps JSX usage.
+const ChainedVerifyModal = window.HxChainedVerify;
 
 function TwoFaSetupModal({ onComplete, onClose }) {
   const [step, setStep] = useState(1); // 1=scan, 2=confirm key, 3=OTP

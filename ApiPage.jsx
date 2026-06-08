@@ -7,10 +7,6 @@ import React, { useState, useEffect, useRef } from "react";
 // keeps a local copy of the code-input + chained-verify primitives.
 // ═══════════════════════════════════════════════════════════════════
 
-// ─── Demo codes (consistent with the rest of the app) ──────────────────────────
-const API_EMAIL_CODE = "654321";
-const API_2FA_CODE   = "123456";
-
 // ─── Storage ────────────────────────────────────────────────────────────────
 const API_KEYS_STORE = "hx_api_keys";
 
@@ -69,13 +65,7 @@ const API_STYLE = `
 .api-modal-close{position:absolute;top:14px;right:14px;background:none;border:none;color:rgba(255,255,255,.4);cursor:pointer;font-size:14px}
 .api-modal-title{font-size:16px;font-weight:700;text-align:center;color:rgba(255,255,255,.9)}
 .api-modal-sub{font-size:12px;color:rgba(255,255,255,.45);text-align:center;margin-top:6px;line-height:1.6}
-.api-code-row{display:flex;gap:6px;justify-content:center;margin:18px 0 4px}
-.api-code-input{width:36px;height:44px;text-align:center;font-family:'JetBrains Mono',monospace;font-size:18px;font-weight:700;color:rgba(255,255,255,.9);background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.12);border-radius:8px;outline:none;transition:border-color 150ms}
-.api-code-input:focus{border-color:rgba(99,102,241,.6)}
-.api-step-dots{display:flex;gap:8px;justify-content:center;align-items:center;margin-top:6px}
-.api-step-dot{width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700}
 .api-secret-box{font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:600;letter-spacing:.04em;border-radius:8px;padding:10px 12px;text-align:center;word-break:break-all;user-select:all;margin-bottom:4px}
-@media(max-width:480px){.api-code-input{width:30px;height:40px;font-size:15px}}
 `;
 function injectApiCSS() {
   if (document.getElementById(API_CSS_ID)) return;
@@ -105,96 +95,9 @@ function maskKey(k) {
   return k ? k.slice(0, 11) + "••••" + k.slice(-4) : "";
 }
 
-// ─── 6-digit code input ──────────────────────────────────────────────────────
-function ApiCodeInput({ expected, onVerified, label }) {
-  const [code, setCode] = useState(["", "", "", "", "", ""]);
-  const [error, setError] = useState("");
-  const [ok, setOk] = useState(false);
-  const refs = useRef([]);
-  const resetT = useRef(null);
-  useEffect(() => () => clearTimeout(resetT.current), []);
-
-  const tryVerify = (digits) => {
-    const full = digits.join("");
-    if (full.length < 6) return;
-    if (full !== expected) {
-      setError("Incorrect code. Try again.");
-      resetT.current = setTimeout(() => {
-        setCode(["", "", "", "", "", ""]); setError(""); refs.current[0]?.focus();
-      }, 800);
-      return;
-    }
-    setOk(true);
-    setTimeout(() => onVerified(), 450);
-  };
-  const onChange = (i, v) => {
-    if (ok) return;
-    if (v.length > 1) v = v.slice(-1);
-    if (v && !/^\d$/.test(v)) return;
-    setError("");
-    const next = [...code]; next[i] = v; setCode(next);
-    if (v && i < 5) refs.current[i + 1]?.focus();
-    if (v && i === 5) tryVerify(next);
-  };
-  const onKey = (i, e) => { if (!ok && e.key === "Backspace" && !code[i] && i > 0) refs.current[i - 1]?.focus(); };
-  const onPaste = (e) => {
-    if (ok) return;
-    e.preventDefault();
-    const p = e.clipboardData.getData("text").replace(/\D/g, "").slice(0, 6);
-    if (!p) return;
-    const next = [...code]; for (let i = 0; i < 6; i++) next[i] = p[i] || ""; setCode(next);
-    if (p.length === 6) tryVerify(next); else refs.current[Math.min(p.length, 5)]?.focus();
-  };
-  const style = ok ? { borderColor: "rgba(74,222,128,.5)", color: "rgba(74,222,128,.9)" }
-                   : error ? { borderColor: "rgba(248,113,113,.6)" } : {};
-  return (
-    <div>
-      <div className="api-code-row" onPaste={onPaste}>
-        {code.map((d, i) => (
-          <input key={i} ref={el => refs.current[i] = el} className="api-code-input"
-            type="text" inputMode="numeric" maxLength={1} value={d} disabled={ok}
-            autoFocus={i === 0} style={style}
-            onChange={e => onChange(i, e.target.value)} onKeyDown={e => onKey(i, e)} />
-        ))}
-      </div>
-      {error && <div style={{ textAlign: "center", fontSize: 11, color: "rgba(248,113,113,.85)", marginTop: 6 }}>{error}</div>}
-      {ok && <div style={{ textAlign: "center", fontSize: 12, color: "rgba(74,222,128,.85)", marginTop: 8, fontWeight: 600 }}>✓ {label}</div>}
-    </div>
-  );
-}
-
-// ─── Chained verify modal (email → authenticator) ────────────────────────────
-function ChainedVerify({ title, onVerified, onClose }) {
-  const [step, setStep] = useState(1);
-  const dot = (n) => step > n
-    ? { background: "rgba(74,222,128,.15)", color: "rgba(74,222,128,.8)", border: "1px solid rgba(74,222,128,.25)" }
-    : step === n
-      ? { background: "rgba(99,102,241,.2)", color: "rgba(99,102,241,.9)", border: "1px solid rgba(99,102,241,.35)" }
-      : { background: "rgba(255,255,255,.04)", color: "rgba(255,255,255,.2)", border: "1px solid rgba(255,255,255,.06)" };
-  return (
-    <div className="api-backdrop" onClick={onClose}>
-      <div className="api-modal" onClick={e => e.stopPropagation()}>
-        <button className="api-modal-close" onClick={onClose}>✕</button>
-        <div className="api-modal-title">{title}</div>
-        <div className="api-modal-sub">
-          {step === 1 ? "Step 1 of 2 · Enter the 6-digit code we emailed you"
-                      : "Step 2 of 2 · Enter the code from your authenticator app"}
-        </div>
-        <div className="api-step-dots">
-          <span className="api-step-dot" style={dot(1)}>{step > 1 ? "✓" : "✉"}</span>
-          <span style={{ color: "rgba(255,255,255,.18)" }}>—</span>
-          <span className="api-step-dot" style={dot(2)}>🔑</span>
-        </div>
-        {step === 1
-          ? <ApiCodeInput key="email" expected={API_EMAIL_CODE} label="Email verified" onVerified={() => setStep(2)} />
-          : <ApiCodeInput key="2fa"   expected={API_2FA_CODE}   label="Verified"        onVerified={onVerified} />}
-        <div style={{ textAlign: "center", marginTop: 12, fontSize: 10, color: "rgba(255,255,255,.25)" }}>
-          Demo · email {API_EMAIL_CODE} · authenticator {API_2FA_CODE}
-        </div>
-      </div>
-    </div>
-  );
-}
+// Chained verify modal (email → authenticator) is shared from shared.js.
+// Alias keeps the JSX <ChainedVerify .../> usage below readable.
+const ChainedVerify = window.HxChainedVerify;
 
 // ─── Secret reveal modal (shown once) ────────────────────────────────────────
 function SecretModal({ keyObj, onClose }) {

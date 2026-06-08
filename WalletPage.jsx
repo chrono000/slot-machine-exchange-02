@@ -1411,10 +1411,10 @@ function SendModal({ onClose, onBack, onSubmitted, rates, initialCoin, balances 
           Enter the 6-digit code from your authenticator app
         </div>
         <TwoFaInputs value={twoFa} onChange={v => { setTwoFa(v); setTwoFaErr(""); }} error={twoFaErr} />
-        <div style={{ fontSize: 10, color: "rgba(255,255,255,.25)", textAlign: "center", marginBottom: 14 }}>Demo code: 123456</div>
+        <div style={{ fontSize: 10, color: "rgba(255,255,255,.25)", textAlign: "center", marginBottom: 14 }}>Demo code: {window.HX_CODES.twoFa}</div>
         <button type="button" className="wl-confirm-btn" onClick={() => {
           if (twoFa.length < 6) { setTwoFaErr("Enter your 6-digit code"); return; }
-          if (twoFa !== "123456") { setTwoFaErr("Invalid code. Try 123456 for demo."); return; }
+          if (twoFa !== window.HX_CODES.twoFa) { setTwoFaErr(`Invalid code. Try ${window.HX_CODES.twoFa} for demo.`); return; }
           setPhase("email"); setEmailCode(""); setEmailErr("");
         }} style={{ background: "rgba(99,102,241,.35)", color: "#fff", border: "1px solid rgba(99,102,241,.5)" }}>
           Verify & continue
@@ -1429,11 +1429,11 @@ function SendModal({ onClose, onBack, onSubmitted, rates, initialCoin, balances 
           <input className="wl-email-input" inputMode="numeric" maxLength={6} placeholder="••••••"
             value={emailCode} onChange={e => { setEmailCode(e.target.value.replace(/\D/g, "").slice(0, 6)); setEmailErr(""); }} />
           {emailErr && <div className="wl-field-err" style={{ textAlign: "center" }}>{emailErr}</div>}
-          <div style={{ fontSize: 10, color: "rgba(255,255,255,.25)", textAlign: "center", marginTop: 8 }}>Demo code: 654321</div>
+          <div style={{ fontSize: 10, color: "rgba(255,255,255,.25)", textAlign: "center", marginTop: 8 }}>Demo code: {window.HX_CODES.email}</div>
         </div>
         <button type="button" className="wl-confirm-btn" onClick={() => {
           if (emailCode.length < 6) { setEmailErr("Enter the 6-digit email code"); return; }
-          if (emailCode !== "654321") { setEmailErr("Invalid code. Try 654321 for demo."); return; }
+          if (emailCode !== window.HX_CODES.email) { setEmailErr(`Invalid code. Try ${window.HX_CODES.email} for demo.`); return; }
           setPhase("confirm");
         }} style={{ background: "rgba(99,102,241,.35)", color: "#fff", border: "1px solid rgba(99,102,241,.5)" }}>
           Verify email code

@@ -265,7 +265,8 @@ function LoginScreen({ onSuccess, goTo }) {
     setLoading(true);
     setTimeout(() => {
       setLoading(false);
-      if (otp !== "123456") { setOtpErr("Invalid code. Use 123456 for demo."); shake(); return; }
+      const demo2fa = (window.HX_CODES && window.HX_CODES.twoFa) || "123456";
+      if (otp !== demo2fa) { setOtpErr(`Invalid code. Use ${demo2fa} for demo.`); shake(); return; }
       onSuccess(email);
     }, 600);
   }
@@ -293,7 +294,7 @@ function LoginScreen({ onSuccess, goTo }) {
               {loading ? <div className="ob-spinner" /> : "Verify →"}
             </button>
           </form>
-          <p style={{fontSize:"10px",color:"rgba(255,255,255,.22)",textAlign:"center",marginTop:"12px"}}>Demo code: 123456</p>
+          <p style={{fontSize:"10px",color:"rgba(255,255,255,.22)",textAlign:"center",marginTop:"12px"}}>Demo code: {(window.HX_CODES && window.HX_CODES.twoFa) || "123456"}</p>
           <div className="ob-link-row">
             <button className="ob-link" type="button" onClick={() => { setTwoFaStep(false); setOtp(""); setOtpErr(""); }}>Back</button>
           </div>
