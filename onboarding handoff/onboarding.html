@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Get Started — HX</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #121218; }
+  </style>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body>
+  <div id="root"></div>
+  <script>
+    fetch('OnboardingPage.jsx')
+      .then(r => r.text())
+      .then(src => {
+        const preamble = `
+          const { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } = React;
+        `;
+        let code = src
+          .replace(/^import\s+.*?from\s+["']react["'];?\s*/m, '')
+          .replace(/export\s+default\s+function\s+OnboardingPage/, 'function OnboardingPage');
+
+        const full = preamble + code + `
+          const root = ReactDOM.createRoot(document.getElementById('root'));
+          root.render(React.createElement(OnboardingPage));
+        `;
+
+        const compiled = Babel.transform(full, { presets: ['react'] }).code;
+        new Function(compiled)();
+      })
+      .catch(err => {
+        document.getElementById('root').innerText = 'Error loading component: ' + err.message;
+        console.error(err);
+      });
+  </script>
+</body>
+</html>

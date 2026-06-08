@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>Crypto Converter</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #121218; }
+  </style>
+  <script src="vendor/react.production.min.js"></script>
+  <script src="vendor/react-dom.production.min.js"></script>
+  <!-- React/ReactDOM vendored locally (loads offline). Babel still lazy-loads from CDN
+       via shared.js (hxEnsureBabel) only on a compile-cache miss. -->
+</head>
+<body>
+  <div id="root"></div>
+  <script src="shared.js"></script>
+  <script>
+    // Auth gate: redirect to onboarding if not authenticated
+    if (localStorage.getItem("hx_onboarded") !== "1") {
+      if (typeof window.saveReturnUrl === "function") window.saveReturnUrl();
+      window.location.href = "onboarding.html";
+    }
+  </script>
+  <script>
+    const preamble = `
+      const { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } = React;
+    `;
+    function strip(src) {
+      return src
+        .replace(/^import\s+.*?from\s+["']react["'];?\s*/gm, '')
+        .replace(/export\s+default\s+function\s+/g, 'function ');
+    }
+
+    const PAGE_FILES = [
+      'WalletPage.jsx',
+      'MarketsPage.jsx',
+      'SettingsPage.jsx',
+      'ApiPage.jsx',
+      // Add new pages here — just one line
+    ];
+
+    const RENDER_SUFFIX = `
+      const root = ReactDOM.createRoot(document.getElementById('root'));
+      root.render(React.createElement(CryptoConverter));
+    `;
+
+    // Fetch sources (cheap, local + HTTP-cached) → hxCompile (a cache hit skips
+    // Babel entirely) → eval. Pages must eval before CryptoConverter so the page
+    // registry (AppPages) is populated before the app renders.
+    Promise.all([
+      ...PAGE_FILES.map(f => fetch(f).then(r => r.text())),
+      fetch('CryptoConverter.jsx').then(r => r.text()),
+    ])
+      .then(async (sources) => {
+        const mainSrc = sources.pop();
+        for (let i = 0; i < PAGE_FILES.length; i++) {
+          new Function(await hxCompile(PAGE_FILES[i], preamble + strip(sources[i])))();
+        }
+        new Function(await hxCompile('CryptoConverter.jsx', preamble + strip(mainSrc) + RENDER_SUFFIX))();
+      })
+      .catch(err => {
+        document.getElementById('root').innerText = 'Error: ' + err.message;
+        console.error(err);
+      });
+  </script>
+</body>
+</html>

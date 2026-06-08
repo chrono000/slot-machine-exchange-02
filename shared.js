@@ -1,0 +1,624 @@
+// ═══════════════════════════════════════════════════════════════════
+// shared.js — Shared constants, utilities, and page registry
+// Loaded via <script> before the page files are fetched + compiled.
+// ═══════════════════════════════════════════════════════════════════
+
+// ═══════════════════════════════════════════════════════════════════
+// JSX compile cache — skip the in-browser Babel pass on repeat loads
+// ───────────────────────────────────────────────────────────────────
+// index.html / onboarding.html fetch the JSX sources, hand each to
+// hxCompile(), and eval the result. hxCompile caches Babel's output in
+// localStorage keyed by a content hash, so an unchanged file is served
+// straight from cache and Babel is only downloaded + run on a cache miss.
+// Editing any file changes its hash and transparently busts the cache.
+// ═══════════════════════════════════════════════════════════════════
+
+// Bump to invalidate every cached compile (e.g. if the loader/preamble changes).
+window.HX_COMPILE_VERSION = "1";
+
+// cyrb53 — fast, dependency-free, low-collision string hash.
+window.hxHash = function hxHash(str) {
+  var h1 = 0xdeadbeef, h2 = 0x41c6ce57;
+  for (var i = 0, ch; i < str.length; i++) {
+    ch = str.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36);
+};
+
+// Lazily download Babel only when a compile is actually needed. Deduped so
+// concurrent cache-miss compiles share a single <script> load.
+window._hxBabelPromise = null;
+window.hxEnsureBabel = function hxEnsureBabel() {
+  if (window.Babel) return Promise.resolve(window.Babel);
+  if (window._hxBabelPromise) return window._hxBabelPromise;
+  window._hxBabelPromise = new Promise(function (resolve, reject) {
+    var s = document.createElement("script");
+    s.src = "https://unpkg.com/@babel/standalone/babel.min.js";
+    s.onload = function () { resolve(window.Babel); };
+    s.onerror = function () { reject(new Error("Failed to load the Babel compiler")); };
+    document.head.appendChild(s);
+  });
+  return window._hxBabelPromise;
+};
+
+// Compile `source` (already preamble-wrapped + stripped by the caller) to JS,
+// returning a Promise<string>. Cache hit → no Babel at all; miss → load + run
+// Babel, store the output, and prune any stale entries for the same file.
+window.hxCompile = function hxCompile(name, source) {
+  var filePrefix = "hxc:" + name + ":";
+  var key = filePrefix + window.HX_COMPILE_VERSION + ":" + window.hxHash(source);
+  try {
+    var hit = localStorage.getItem(key);
+    if (hit != null) return Promise.resolve(hit);
+  } catch (e) {}
+  return window.hxEnsureBabel().then(function (Babel) {
+    var code = Babel.transform(source, { presets: ["react"] }).code;
+    try {
+      for (var i = localStorage.length - 1; i >= 0; i--) {
+        var k = localStorage.key(i);
+        if (k && k.indexOf(filePrefix) === 0 && k !== key) localStorage.removeItem(k);
+      }
+      localStorage.setItem(key, code);
+    } catch (e) {}
+    return code;
+  });
+};
+
+// ── Coins (superset — WalletPage format with integer decimals) ──
+window.COINS = {
+  BTC:  { name: "Bitcoin",     icon: "₿", color: "#f7931a", decimals: 8, balance: 2.45831,   hold: 0 },
+  ETH:  { name: "Ethereum",    icon: "Ξ", color: "#627eea", decimals: 4, balance: 34.2819,   hold: 0 },
+  USDT: { name: "Tether",      icon: "₮", color: "#26a17b", decimals: 2, balance: 48750.00,  hold: 1300 },
+  SOL:  { name: "Solana",      icon: "◎", color: "#9945ff", decimals: 3, balance: 312.485,   hold: 0 },
+  BNB:  { name: "BNB",         icon: "◆", color: "#f0b90b", decimals: 4, balance: 18.753,    hold: 0 },
+  XRP:  { name: "Ripple",      icon: "✕", color: "#00aae4", decimals: 4, balance: 5420.00,   hold: 0 },
+  USDC: { name: "USD Coin",    icon: "$", color: "#2775ca", decimals: 2, balance: 12500.00,  hold: 0 },
+  ADA:  { name: "Cardano",     icon: "₳", color: "#3d9fee", decimals: 6, balance: 0,         hold: 0 },
+  DOGE: { name: "Dogecoin",    icon: "Ð", color: "#c2a633", decimals: 2, balance: 0,         hold: 0 },
+  AVAX: { name: "Avalanche",   icon: "▲", color: "#e84142", decimals: 4, balance: 0,         hold: 0 },
+  POL:  { name: "Polygon",     icon: "⬡", color: "#8247e5", decimals: 4, balance: 0,         hold: 0 },
+  HYPE: { name: "Hyperliquid", icon: "H", color: "#00e5ff", decimals: 4, balance: 0,         hold: 0 },
+  XMR:  { name: "Monero",      icon: "ɱ", color: "#ff6600", decimals: 4, balance: 0.00012,   hold: 0 },
+};
+
+// ── Base exchange rates ──
+window.BASE_RATES = {
+  "BTC/USDT": 67432.50, "ETH/USDT": 3521.80, "SOL/USDT": 142.65,
+  "BNB/USDT": 612.40,   "XRP/USDT": 0.5214,  "USDC/USDT": 1.0001,
+  "XMR/USDT": 162.50,
+};
+
+// ── Mock 24h changes (superset — includes MarketsPage extras) ──
+window.MOCK_CHANGES = {
+  BTC: 2.34, ETH: -1.12, USDT: 0.01, SOL: 5.67, BNB: -0.88, XRP: 3.21, USDC: 0.00,
+  ADA: -2.15, DOGE: 4.32, AVAX: -3.87, POL: 1.94, HYPE: 6.81,
+};
+
+// ── Colors ──
+window.COLOR_UP   = "#4ade80";
+window.COLOR_DOWN = "#f87171";
+
+// ── Shared utilities ──
+// Inserts thousands separators. Accepts integer-only strings ("12345") or
+// decimal-bearing strings ("12345.678") — only the integer portion is commaed.
+window.addCommas = function addCommas(s) {
+  if (!s) return s;
+  const dot = s.indexOf(".");
+  const intPart = dot === -1 ? s : s.slice(0, dot);
+  const fracPart = dot === -1 ? "" : s.slice(dot);
+  if (intPart.length <= 3) return intPart + fracPart;
+  let r = "";
+  for (let j = 0; j < intPart.length; j++) {
+    if (j > 0 && (intPart.length - j) % 3 === 0) r += ",";
+    r += intPart[j];
+  }
+  return r + fracPart;
+};
+
+window.getUSDRate = function getUSDRate(rates, ticker) {
+  if (ticker === "USDT") return 1;
+  if (ticker === "USDC") return rates["USDC/USDT"] || 1;
+  return rates[ticker + "/USDT"] || 0;
+};
+
+window.fmtUSD = function fmtUSD(n, compact) {
+  if (compact && n >= 1_000_000_000) return "$" + (n / 1_000_000_000).toFixed(2) + "B";
+  if (compact && n >= 10_000_000)    return "$" + (n / 1_000_000).toFixed(2) + "M";
+  var parts = n.toFixed(2).split(".");
+  return "$" + addCommas(parts[0]) + "." + parts[1];
+};
+
+window.fmtBal = function fmtBal(n, decimals) {
+  var parts = n.toFixed(Math.min(decimals, 5)).split(".");
+  var trimmed = parts[1] ? parts[1].replace(/0+$/, "") : "";
+  return trimmed ? addCommas(parts[0]) + "." + trimmed : addCommas(parts[0]);
+};
+
+// Like fmtBal but with up to 8 decimals of precision and no minimum. Keeps
+// dust amounts (sub-cent values, fractions of satoshis) actually visible.
+window.fmtDust = function fmtDust(n) {
+  if (!Number.isFinite(n) || n === 0) return "0";
+  var s = n.toFixed(8);
+  s = s.replace(/0+$/, "").replace(/\.$/, "");
+  return s;
+};
+
+window.fmtPrice = function fmtPrice(n) {
+  if (n >= 1000) return fmtUSD(n);
+  if (n >= 1) return "$" + n.toFixed(4);
+  return "$" + n.toFixed(6);
+};
+
+// ── App deep links & remembered convert pair ──
+window.HX_CONVERT_PAIR_KEY = "hx_convert_pair";
+window.HX_RETURN_URL_KEY = "hx_return_url";
+window.HX_WALLET_ACTIONS = new Set(["coin", "buy", "sell", "send", "receive"]);
+
+window.saveReturnUrl = function saveReturnUrl() {
+  var qs = window.location.search;
+  var hash = window.location.hash;
+  if (!qs && !hash) return;
+  try {
+    sessionStorage.setItem(window.HX_RETURN_URL_KEY, window.location.pathname + qs + hash);
+  } catch (e) {}
+};
+
+window.consumeReturnUrl = function consumeReturnUrl(fallback) {
+  fallback = fallback || "index.html";
+  try {
+    var ret = sessionStorage.getItem(window.HX_RETURN_URL_KEY);
+    sessionStorage.removeItem(window.HX_RETURN_URL_KEY);
+    return ret || fallback;
+  } catch (e) {
+    return fallback;
+  }
+};
+
+window.parseAppLink = function parseAppLink(validTabs) {
+  var params = new URLSearchParams(window.location.search);
+  var tab = (params.get("tab") || "").toLowerCase();
+  var hashRaw = window.location.hash.replace(/^#/, "").split("?")[0];
+  if (!tab && hashRaw && validTabs.has(hashRaw)) tab = hashRaw;
+  if (!tab || !validTabs.has(tab)) tab = "convert";
+  var action = (params.get("action") || "coin").toLowerCase();
+  if (!window.HX_WALLET_ACTIONS.has(action)) action = "coin";
+  return {
+    tab: tab,
+    buy: params.get("buy") ? params.get("buy").toUpperCase() : null,
+    spend: params.get("spend") ? params.get("spend").toUpperCase() : null,
+    coin: params.get("coin") ? params.get("coin").toUpperCase() : null,
+    action: action,
+  };
+};
+
+window.buildAppLink = function buildAppLink(state) {
+  var tab = state.tab || "convert";
+  var params = new URLSearchParams();
+  if (tab !== "convert") params.set("tab", tab);
+  if (tab === "convert") {
+    if (state.buy) params.set("buy", state.buy);
+    if (state.spend) params.set("spend", state.spend);
+  }
+  if (tab === "wallet" && state.coin) {
+    params.set("coin", state.coin);
+    if (state.action && state.action !== "coin") params.set("action", state.action);
+  }
+  var qs = params.toString();
+  var path = window.location.pathname || "/";
+  if (tab === "convert") return qs ? path + "?" + qs : path;
+  return qs ? path + "?" + qs + "#" + tab : path + "#" + tab;
+};
+
+window.loadConvertPair = function loadConvertPair(validTickers) {
+  try {
+    var raw = localStorage.getItem(window.HX_CONVERT_PAIR_KEY);
+    if (!raw) return null;
+    var p = JSON.parse(raw);
+    if (validTickers.has(p.buy) && validTickers.has(p.spend) && p.buy !== p.spend) return { buy: p.buy, spend: p.spend };
+  } catch (e) {}
+  return null;
+};
+
+window.saveConvertPair = function saveConvertPair(buy, spend) {
+  try {
+    localStorage.setItem(window.HX_CONVERT_PAIR_KEY, JSON.stringify({ buy: buy, spend: spend }));
+  } catch (e) {}
+};
+
+// Seeded xor-shift RNG — same seed always yields same sequence. Used for deterministic SVG art.
+window.makeSeededRand = function makeSeededRand(seed) {
+  let h = 0;
+  for (let i = 0; i < seed.length; i++) {
+    h = (Math.imul(31, h) + seed.charCodeAt(i)) | 0;
+  }
+  return function() {
+    h ^= h << 13; h ^= h >> 17; h ^= h << 5;
+    return (h >>> 0) / 0xffffffff;
+  };
+};
+
+// Mock chart data — walks backwards from endVal with noise. Used for sparklines/charts.
+window.genChartData = function genChartData(endVal, points, volatility) {
+  const data = [endVal];
+  for (let i = 1; i < points; i++) {
+    const prev = data[0];
+    const delta = prev * volatility * (Math.random() - 0.48);
+    data.unshift(Math.max(prev - delta, endVal * 0.85));
+  }
+  return data;
+};
+
+// ── Page Registry ──
+window.AppPages = {
+  _pages: [],
+  register: function(id, config) {
+    this._pages = this._pages.filter(function(p) { return p.id !== id; });
+    this._pages.push(Object.assign({ id: id }, config));
+  },
+  getAll: function() { return this._pages; },
+  get: function(id) { return this._pages.find(function(p) { return p.id === id; }); },
+  getOrder: function() { return this._pages.map(function(p) { return p.id; }); }
+};
+
+// ── Animation level system ──
+window._animLevel = "MEDIUM";
+
+window.getAnimLevel = function() { return window._animLevel; };
+window.getAnimScale = function() {
+  return window._animLevel === "NONE" ? 0 : window._animLevel === "MEDIUM" ? 0.5 : 1;
+};
+window.animMs = function(ms) { return Math.round(ms * window.getAnimScale()); };
+
+window.isHeavy = function() { return window._animLevel === "HEAVY"; };
+window.isAnimOn = function() { return window._animLevel !== "NONE"; };
+window.EASE_SPRING = "cubic-bezier(.34,1.56,.64,1)";
+window.EASE_SMOOTH = "cubic-bezier(.2,.8,.2,1)";
+window.getEasing = function() { return window.isHeavy() ? window.EASE_SPRING : window.EASE_SMOOTH; };
+
+// ── Sound system ──
+// Per-channel defaults: only success (buy confirmation) is on by default
+window._sounds = { success: true, notifications: false, favorites: false, save: false };
+window.SOUND_CHANNELS = ["success", "notifications", "favorites", "save"];
+
+window.isSoundOn = function(ch) { return !!window._sounds[ch]; };
+window.setSounds = function(obj) {
+  window.SOUND_CHANNELS.forEach(function(ch) {
+    if (typeof obj[ch] === "boolean") window._sounds[ch] = obj[ch];
+  });
+};
+
+// Synthesized micro-sounds via Web Audio API — no files to load
+window._sndCtx = null;
+window._getSndCtx = function() {
+  if (!window._sndCtx) {
+    try { window._sndCtx = new (window.AudioContext || window.webkitAudioContext)(); }
+    catch(e) { return null; }
+  }
+  return window._sndCtx;
+};
+
+// Soft ascending two-note pop — for notification arrival
+window.playNotifSound = function() {
+  if (!isSoundOn("notifications")) return;
+  var ctx = window._getSndCtx(); if (!ctx) return;
+  var t = ctx.currentTime;
+  var play = function(freq, start, dur, vol) {
+    var osc = ctx.createOscillator(), g = ctx.createGain();
+    osc.type = "sine"; osc.frequency.value = freq;
+    g.gain.setValueAtTime(vol, t + start);
+    g.gain.exponentialRampToValueAtTime(0.001, t + start + dur);
+    osc.connect(g); g.connect(ctx.destination);
+    osc.start(t + start); osc.stop(t + start + dur);
+  };
+  play(660, 0, 0.1, 0.08);
+  play(880, 0.07, 0.15, 0.07);
+};
+
+// Quick ascending chime — for adding favorite
+window.playStarSound = function() {
+  if (!isSoundOn("favorites")) return;
+  var ctx = window._getSndCtx(); if (!ctx) return;
+  var t = ctx.currentTime;
+  var play = function(freq, start, dur, vol) {
+    var osc = ctx.createOscillator(), g = ctx.createGain();
+    osc.type = "sine"; osc.frequency.value = freq;
+    g.gain.setValueAtTime(vol, t + start);
+    g.gain.exponentialRampToValueAtTime(0.001, t + start + dur);
+    osc.connect(g); g.connect(ctx.destination);
+    osc.start(t + start); osc.stop(t + start + dur);
+  };
+  play(784, 0, 0.1, 0.08);
+  play(1047, 0.07, 0.15, 0.09);
+};
+
+// Soft descending tone — for removing favorite
+window.playUnstarSound = function() {
+  if (!isSoundOn("favorites")) return;
+  var ctx = window._getSndCtx(); if (!ctx) return;
+  var t = ctx.currentTime;
+  var osc = ctx.createOscillator(), g = ctx.createGain();
+  osc.type = "triangle"; osc.frequency.value = 1400;
+  osc.frequency.exponentialRampToValueAtTime(800, t + 0.1);
+  g.gain.setValueAtTime(0.05, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + 0.12);
+  osc.connect(g); g.connect(ctx.destination);
+  osc.start(t); osc.stop(t + 0.12);
+};
+
+// Gentle confirmation chord — for settings save
+window.playSaveSound = function() {
+  if (!isSoundOn("save")) return;
+  var ctx = window._getSndCtx(); if (!ctx) return;
+  var t = ctx.currentTime;
+  var play = function(freq, start, dur, vol) {
+    var osc = ctx.createOscillator(), g = ctx.createGain();
+    osc.type = "sine"; osc.frequency.value = freq;
+    g.gain.setValueAtTime(vol, t + start);
+    g.gain.exponentialRampToValueAtTime(0.001, t + start + dur);
+    osc.connect(g); g.connect(ctx.destination);
+    osc.start(t + start); osc.stop(t + start + dur);
+  };
+  play(523, 0, 0.15, 0.06);
+  play(659, 0.06, 0.15, 0.06);
+  play(784, 0.12, 0.22, 0.07);
+};
+
+// Preview a sound (bypasses channel toggle — for settings test button)
+window.previewSound = function(channel) {
+  var ctx = window._getSndCtx();
+  if (!ctx) return;
+  var t = ctx.currentTime;
+  var tone = function(type, freq, start, dur, vol) {
+    var osc = ctx.createOscillator(), g = ctx.createGain();
+    osc.type = type; osc.frequency.value = freq;
+    g.gain.setValueAtTime(vol, t + start);
+    g.gain.exponentialRampToValueAtTime(0.001, t + start + dur);
+    osc.connect(g); g.connect(ctx.destination);
+    osc.start(t + start); osc.stop(t + start + dur);
+  };
+  if (channel === "success") {
+    try { var a = new Audio("success-bought-snap.mp4.mp4"); a.volume = 0.5; a.play(); } catch {}
+  } else if (channel === "notifications") {
+    tone("sine", 660, 0, 0.1, 0.08);
+    tone("sine", 880, 0.07, 0.15, 0.07);
+  } else if (channel === "favorites") {
+    tone("sine", 784, 0, 0.1, 0.08);
+    tone("sine", 1047, 0.07, 0.15, 0.09);
+  } else if (channel === "save") {
+    tone("sine", 523, 0, 0.15, 0.06);
+    tone("sine", 659, 0.06, 0.15, 0.06);
+    tone("sine", 784, 0.12, 0.22, 0.07);
+  }
+};
+
+window.setAnimLevel = function(level) {
+  window._animLevel = level;
+  var b = document.body;
+  if (!b) return;
+  b.classList.remove("anim-none", "anim-medium", "anim-heavy");
+  b.classList.add("anim-" + level.toLowerCase());
+
+  b.style.setProperty('--hx-easing', level === 'HEAVY' ? window.EASE_SPRING : window.EASE_SMOOTH);
+
+  // Inject override stylesheet once
+  if (!document.getElementById("hx-anim-overrides")) {
+    var st = document.createElement("style");
+    st.id = "hx-anim-overrides";
+    st.textContent =
+      "body.anim-none *,body.anim-none *::before,body.anim-none *::after{" +
+      "animation:none!important;transition:none!important}" +
+      "body.anim-none .wl-tx-row--highlight{animation:wlTxHighlight 2.2s ease-out!important}";
+    document.head.appendChild(st);
+  }
+
+  // Inject shared tab-transition keyframes once
+  if (!document.getElementById("hx-tab-anims")) {
+    var st2 = document.createElement("style");
+    st2.id = "hx-tab-anims";
+    st2.textContent =
+      "@keyframes tabFadeIn{from{opacity:0}to{opacity:1}}" +
+      "@keyframes tabSlideInLeft{from{opacity:0;transform:translateX(18px)}to{opacity:1;transform:translateX(0)}}" +
+      "@keyframes tabSlideInRight{from{opacity:0;transform:translateX(-18px)}to{opacity:1;transform:translateX(0)}}" +
+      "@keyframes rowStaggerIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}";
+    document.head.appendChild(st2);
+  }
+
+  // Inject shared skeleton shimmer styles once (used by all pages)
+  if (!document.getElementById("hx-skeleton-css")) {
+    var st3 = document.createElement("style");
+    st3.id = "hx-skeleton-css";
+    st3.textContent =
+      ".hx-sk{border-radius:4px;background:linear-gradient(90deg,rgba(255,255,255,.04) 25%,rgba(255,255,255,.1) 50%,rgba(255,255,255,.04) 75%);background-size:400px 100%;animation:hxShimmer 1.4s ease-in-out infinite}" +
+      ".hx-sk-circle{border-radius:50%;flex-shrink:0;background:linear-gradient(90deg,rgba(255,255,255,.04) 25%,rgba(255,255,255,.1) 50%,rgba(255,255,255,.04) 75%);background-size:400px 100%;animation:hxShimmer 1.4s ease-in-out infinite}" +
+      ".hx-sk-lines{flex:1;display:flex;flex-direction:column;gap:5px}" +
+      "@keyframes hxShimmer{0%{background-position:-400px 0}100%{background-position:400px 0}}" +
+      "@keyframes hxSkFadeIn{from{opacity:0}to{opacity:1}}";
+    document.head.appendChild(st3);
+  }
+};
+
+// ── Shared skeleton element helpers ──
+window.hxSk = function(h, w, delay, extra) {
+  return React.createElement("div", {
+    className: "hx-sk",
+    style: Object.assign({ height: h, width: w, animationDelay: (delay * getAnimScale()) + "s" }, extra)
+  });
+};
+
+window.hxSkCircle = function(size, delay) {
+  return React.createElement("div", {
+    className: "hx-sk-circle",
+    style: { width: size, height: size, animationDelay: (delay * getAnimScale()) + "s" }
+  });
+};
+
+// ── Flow / empty / error dead-end UI ──
+(function injectFlowStateCSS() {
+  if (document.getElementById("hx-flow-css")) return;
+  var st = document.createElement("style");
+  st.id = "hx-flow-css";
+  st.textContent =
+    ".hx-empty{padding:28px 16px;text-align:center}" +
+    ".hx-empty--compact{padding:12px 10px}" +
+    ".hx-empty__icon{font-size:22px;line-height:1;margin-bottom:8px;opacity:.45}" +
+    ".hx-empty--compact .hx-empty__icon{font-size:14px;margin-bottom:4px}" +
+    ".hx-empty__title{font-size:12px;font-weight:600;color:rgba(255,255,255,.45);letter-spacing:.03em;margin-bottom:4px}" +
+    ".hx-empty--compact .hx-empty__title{font-size:11px;margin-bottom:2px}" +
+    ".hx-empty__msg{font-size:11px;color:rgba(255,255,255,.22);line-height:1.45;max-width:260px;margin:0 auto}" +
+    ".hx-dead{display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:48px 24px;min-height:280px}" +
+    ".hx-dead--fill{min-height:min(420px,calc(100vh - 200px));width:100%}" +
+    ".hx-dead--overlay{position:absolute;inset:0;z-index:800;background:rgba(22,22,30,.92);backdrop-filter:blur(6px);border-radius:14px;min-height:100%}" +
+    ".hx-dead__icon{width:52px;height:52px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:22px;margin-bottom:16px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.08);color:rgba(255,255,255,.5)}" +
+    ".hx-dead__icon--warn{background:rgba(251,146,60,.08);border-color:rgba(251,146,60,.2);color:rgba(251,191,36,.9)}" +
+    ".hx-dead__icon--err{background:rgba(248,113,113,.08);border-color:rgba(248,113,113,.2);color:rgba(248,113,113,.9)}" +
+    ".hx-dead__title{font-size:15px;font-weight:700;color:rgba(255,255,255,.75);letter-spacing:.02em;margin-bottom:6px}" +
+    ".hx-dead__msg{font-size:12px;color:rgba(255,255,255,.28);line-height:1.5;max-width:300px;margin-bottom:20px}" +
+    ".hx-dead__btn{height:40px;padding:0 20px;border-radius:10px;border:0;font-family:inherit;font-size:12px;font-weight:600;letter-spacing:.04em;cursor:pointer;background:rgba(255,255,255,.1);color:rgba(255,255,255,.85);transition:background 150ms}" +
+    ".hx-dead__btn:hover{background:rgba(255,255,255,.16)}" +
+    ".hx-dead__btn--primary{background:linear-gradient(135deg,rgba(110,160,255,.9),rgba(110,160,255,.65));color:#0d1118}" +
+    ".hx-dead__btn--primary:hover{filter:brightness(1.06)}" +
+    ".hx-banner{margin-top:12px;padding:10px 14px;border-radius:10px;display:flex;align-items:flex-start;gap:10px;font-size:11px;line-height:1.45}" +
+    ".hx-banner--err{background:rgba(248,113,113,.06);border:1px solid rgba(248,113,113,.18);color:rgba(252,165,165,.9)}" +
+    ".hx-banner--warn{background:rgba(251,146,60,.06);border:1px solid rgba(251,146,60,.18);color:rgba(251,191,36,.9)}" +
+    ".hx-banner__icon{flex-shrink:0;font-size:13px;opacity:.85;margin-top:1px}" +
+    ".hx-banner__body{flex:1;min-width:0}" +
+    ".hx-banner__title{font-weight:600;margin-bottom:2px}" +
+    ".hx-banner__btn{margin-top:8px;height:30px;padding:0 12px;border-radius:7px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.06);color:rgba(255,255,255,.75);font-family:inherit;font-size:10px;font-weight:600;cursor:pointer;letter-spacing:.03em}" +
+    ".hx-banner__btn:hover{background:rgba(255,255,255,.1)}";
+  document.head.appendChild(st);
+})();
+
+window.FLOW_DEAD_END_PRESETS = {
+  offline: {
+    icon: "⌁", iconTone: "warn",
+    title: "You're offline",
+    message: "Check your connection and try again. Balances and quotes won't update until you're back online.",
+    actionLabel: "Try again",
+  },
+  session: {
+    icon: "⏱", iconTone: "warn",
+    title: "Session expired",
+    message: "For your security, sign in again to continue trading and managing your wallet.",
+    actionLabel: "Back to sign in",
+    primary: true,
+  },
+  rate: {
+    icon: "↯", iconTone: "err",
+    title: "Rates unavailable",
+    message: "We couldn't load exchange rates right now. Quotes and conversions are paused.",
+    actionLabel: "Retry",
+  },
+  quote: {
+    icon: "✕", iconTone: "err",
+    title: "Quote failed",
+    message: "We couldn't get a price for this pair. Check your amount and try again.",
+    actionLabel: "Try again",
+  },
+  search: {
+    icon: "⌕", iconTone: "",
+    title: "No results",
+    message: "Try a different search term or clear the filter.",
+  },
+};
+
+window.getFlowPreview = function() {
+  try {
+    var s = JSON.parse(localStorage.getItem("hx_settings") || "{}");
+    var v = s.previewFlowState || "none";
+    return ["none", "offline", "session", "rate", "quote"].indexOf(v) !== -1 ? v : "none";
+  } catch (e) { return "none"; }
+};
+
+window.setFlowPreview = function(state) {
+  try {
+    var s = JSON.parse(localStorage.getItem("hx_settings") || "{}");
+    s.previewFlowState = state || "none";
+    localStorage.setItem("hx_settings", JSON.stringify(s));
+  } catch (e) {}
+  window.dispatchEvent(new Event("hx-flow-preview"));
+};
+
+window.EmptyState = function EmptyState(props) {
+  var p = props || {};
+  var compact = !!p.compact;
+  return React.createElement("div", {
+    className: "hx-empty" + (compact ? " hx-empty--compact" : ""),
+  },
+    p.icon ? React.createElement("div", { className: "hx-empty__icon" }, p.icon) : null,
+    React.createElement("div", { className: "hx-empty__title" }, p.title || "Nothing here"),
+    p.message ? React.createElement("div", { className: "hx-empty__msg" }, p.message) : null
+  );
+};
+
+window.FlowDeadEnd = function FlowDeadEnd(props) {
+  var p = props || {};
+  var preset = window.FLOW_DEAD_END_PRESETS[p.variant] || {};
+  var icon = p.icon || preset.icon || "○";
+  var title = p.title || preset.title || "Something went wrong";
+  var message = p.message || preset.message || "";
+  var actionLabel = p.actionLabel || preset.actionLabel;
+  var iconTone = p.iconTone || preset.iconTone || "";
+  var fill = p.fill ? " hx-dead--fill" : "";
+  var overlay = p.overlay ? " hx-dead--overlay" : "";
+  return React.createElement("div", {
+    className: "hx-dead" + fill + overlay,
+    role: p.role || "status",
+  },
+    React.createElement("div", { className: "hx-dead__icon" + (iconTone ? " hx-dead__icon--" + iconTone : "") }, icon),
+    React.createElement("div", { className: "hx-dead__title" }, title),
+    message ? React.createElement("div", { className: "hx-dead__msg" }, message) : null,
+    actionLabel && p.onAction
+      ? React.createElement("button", {
+          type: "button",
+          className: "hx-dead__btn" + (preset.primary || p.primary ? " hx-dead__btn--primary" : ""),
+          onClick: p.onAction,
+        }, actionLabel)
+      : null
+  );
+};
+
+window.FlowBanner = function FlowBanner(props) {
+  var p = props || {};
+  var tone = p.tone === "warn" ? "warn" : "err";
+  return React.createElement("div", { className: "hx-banner hx-banner--" + tone },
+    React.createElement("span", { className: "hx-banner__icon" }, p.icon || (tone === "warn" ? "!" : "✕")),
+    React.createElement("div", { className: "hx-banner__body" },
+      p.title ? React.createElement("div", { className: "hx-banner__title" }, p.title) : null,
+      p.message ? React.createElement("span", null, p.message) : null,
+      p.actionLabel && p.onAction
+        ? React.createElement("button", { type: "button", className: "hx-banner__btn", onClick: p.onAction }, p.actionLabel)
+        : null
+    )
+  );
+};
+
+// ── Global mobile / touch polish ──
+(function injectMobileCSS() {
+  if (document.getElementById("hx-mobile-css")) return;
+  var st = document.createElement("style");
+  st.id = "hx-mobile-css";
+  st.textContent =
+    "html{overflow-x:hidden;-webkit-text-size-adjust:100%}" +
+    "body{overscroll-behavior-y:none}" +
+    "button,a,input,select,textarea,[role=button]{-webkit-tap-highlight-color:transparent}" +
+    "button,.cv-tab,.mk-pill,.mk-trade-btn,.mk-view-btn,.wl-cd-btn,.wl-confirm-btn,.wl-copy-btn,.st-save-btn,.st-toggle{touch-action:manipulation}";
+  document.head.appendChild(st);
+})();
+
+// Init from localStorage
+(function() {
+  try {
+    var s = JSON.parse(localStorage.getItem("hx_settings") || "{}");
+    if (s.animLevel && ["NONE","MEDIUM","HEAVY"].indexOf(s.animLevel) !== -1)
+      window._animLevel = s.animLevel;
+    if (s.sounds) window.setSounds(s.sounds);
+  } catch(e) {}
+  if (document.body) window.setAnimLevel(window._animLevel);
+  else document.addEventListener("DOMContentLoaded", function() {
+    window.setAnimLevel(window._animLevel);
+  });
+})();

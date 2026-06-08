@@ -1,0 +1,14 @@
+# OS junk
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Local editor / agent config (machine-specific)
+.claude/
+.cursor/
+
+# Dependencies (CDN/vendored at runtime — nothing to install)
+node_modules/
+
+# Logs / scratch
+*.log
