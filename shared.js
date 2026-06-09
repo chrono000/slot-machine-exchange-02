@@ -622,7 +622,8 @@ function injectHxvCSS() {
   document.head.appendChild(st);
 }
 
-// 6-digit boxed code input. props: expected, onVerified, label.
+// 6-digit boxed code input.
+// props: expected (optional — omit to accept any complete 6-digit code), onVerified, label.
 window.HxCodeInput = function HxCodeInput(props) {
   var p = props || {};
   var expected = p.expected, onVerified = p.onVerified, label = p.label || "Verified";
@@ -631,12 +632,21 @@ window.HxCodeInput = function HxCodeInput(props) {
   var oks = React.useState(false); var ok = oks[0], setOk = oks[1];
   var refs = React.useRef([]);
   var resetT = React.useRef(null);
-  React.useEffect(function () { return function () { if (resetT.current) clearTimeout(resetT.current); }; }, []);
+  var successT = React.useRef(null);
+  // Clear both timers on unmount so a pending success callback can't fire after
+  // the host modal has been closed (would otherwise run the gated action anyway).
+  React.useEffect(function () {
+    return function () {
+      if (resetT.current) clearTimeout(resetT.current);
+      if (successT.current) clearTimeout(successT.current);
+    };
+  }, []);
 
   function tryVerify(digits) {
     var full = digits.join("");
     if (full.length < 6) return;
-    if (full !== expected) {
+    // expected omitted → permissive (any complete 6-digit code passes).
+    if (expected && full !== expected) {
       setError("Incorrect code. Try again.");
       resetT.current = setTimeout(function () {
         setCode(["", "", "", "", "", ""]); setError("");
@@ -645,7 +655,7 @@ window.HxCodeInput = function HxCodeInput(props) {
       return;
     }
     setOk(true);
-    setTimeout(function () { if (onVerified) onVerified(); }, 450);
+    successT.current = setTimeout(function () { if (onVerified) onVerified(); }, 450);
   }
   function onChange(i, v) {
     if (ok) return;
@@ -692,37 +702,53 @@ window.HxCodeInput = function HxCodeInput(props) {
 };
 
 // Chained verify modal: email code → authenticator code → onVerified().
-// props: title, onVerified, onClose, codes (defaults to window.HX_CODES).
+// props: title, onVerified, onClose, codes (defaults to window.HX_CODES),
+//        requireTwoFa (default true; false = email step only, for when the
+//        account has 2FA disabled).
 window.HxChainedVerify = function HxChainedVerify(props) {
   var p = props || {};
-  injectHxvCSS();
   var codes = p.codes || window.HX_CODES;
+  var requireTwoFa = p.requireTwoFa !== false;
   var ss = React.useState(1); var step = ss[0], setStep = ss[1];
   function dot(n) {
     return step > n ? { background: "rgba(74,222,128,.15)", color: "rgba(74,222,128,.8)", border: "1px solid rgba(74,222,128,.25)" }
          : step === n ? { background: "rgba(99,102,241,.2)", color: "rgba(99,102,241,.9)", border: "1px solid rgba(99,102,241,.35)" }
          : { background: "rgba(255,255,255,.04)", color: "rgba(255,255,255,.2)", border: "1px solid rgba(255,255,255,.06)" };
   }
+  var sub = !requireTwoFa
+    ? "Step 1 of 1 · Enter the 6-digit code we emailed you"
+    : step === 1 ? "Step 1 of 2 · Enter the 6-digit code we emailed you"
+                 : "Step 2 of 2 · Enter the code from your authenticator app";
+  var dots = requireTwoFa
+    ? React.createElement("div", { className: "hxv-dots" },
+        React.createElement("span", { className: "hxv-dot", style: dot(1) }, step > 1 ? "✓" : "✉"),
+        React.createElement("span", { style: { color: "rgba(255,255,255,.18)" } }, "—"),
+        React.createElement("span", { className: "hxv-dot", style: dot(2) }, "🔑"))
+    : React.createElement("div", { className: "hxv-dots" },
+        React.createElement("span", { className: "hxv-dot", style: dot(1) }, "✉"));
+  var emailInput = React.createElement(window.HxCodeInput, {
+    key: "email", expected: codes.email, label: "Email verified",
+    onVerified: requireTwoFa ? function () { setStep(2); } : p.onVerified,
+  });
+  var twoFaInput = React.createElement(window.HxCodeInput, {
+    key: "2fa", expected: codes.twoFa, label: "Verified", onVerified: p.onVerified,
+  });
   return React.createElement("div", { className: "hxv-backdrop", onClick: p.onClose },
     React.createElement("div", { className: "hxv-modal", onClick: function (e) { e.stopPropagation(); } },
       React.createElement("button", { className: "hxv-close", onClick: p.onClose }, "✕"),
       React.createElement("div", { className: "hxv-title" }, p.title || "Confirm It's You"),
-      React.createElement("div", { className: "hxv-sub" },
-        step === 1 ? "Step 1 of 2 · Enter the 6-digit code we emailed you"
-                   : "Step 2 of 2 · Enter the code from your authenticator app"),
-      React.createElement("div", { className: "hxv-dots" },
-        React.createElement("span", { className: "hxv-dot", style: dot(1) }, step > 1 ? "✓" : "✉"),
-        React.createElement("span", { style: { color: "rgba(255,255,255,.18)" } }, "—"),
-        React.createElement("span", { className: "hxv-dot", style: dot(2) }, "🔑")
-      ),
-      step === 1
-        ? React.createElement(window.HxCodeInput, { key: "email", expected: codes.email, label: "Email verified", onVerified: function () { setStep(2); } })
-        : React.createElement(window.HxCodeInput, { key: "2fa", expected: codes.twoFa, label: "Verified", onVerified: p.onVerified }),
+      React.createElement("div", { className: "hxv-sub" }, sub),
+      dots,
+      (requireTwoFa && step === 2) ? twoFaInput : emailInput,
       React.createElement("div", { style: { textAlign: "center", marginTop: 12, fontSize: 10, color: "rgba(255,255,255,.25)" } },
-        "Demo · email " + codes.email + " · authenticator " + codes.twoFa)
+        requireTwoFa ? ("Demo · email " + codes.email + " · authenticator " + codes.twoFa)
+                     : ("Demo · email " + codes.email))
     )
   );
 };
+
+// Inject the shared verify CSS once at load (rather than on every modal render).
+injectHxvCSS();
 
 // ── Global mobile / touch polish ──
 (function injectMobileCSS() {

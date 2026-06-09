@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect } from "react";
 
 // ═══════════════════════════════════════════════════════════════════
 // ApiPage — generate / revoke API keys. Every mutating action is gated
@@ -95,10 +95,6 @@ function maskKey(k) {
   return k ? k.slice(0, 11) + "••••" + k.slice(-4) : "";
 }
 
-// Chained verify modal (email → authenticator) is shared from shared.js.
-// Alias keeps the JSX <ChainedVerify .../> usage below readable.
-const ChainedVerify = window.HxChainedVerify;
-
 // ─── Secret reveal modal (shown once) ────────────────────────────────────────
 function SecretModal({ keyObj, onClose }) {
   const [copied, setCopied] = useState("");
@@ -130,6 +126,9 @@ function SecretModal({ keyObj, onClose }) {
 
 // ─── Page ────────────────────────────────────────────────────────────────────
 export default function ApiPage({ embedded, onNavigate }) {
+  // Chained verify modal (email → authenticator) is shared from shared.js;
+  // resolved at render time so script-order can't leave it undefined.
+  const ChainedVerify = window.HxChainedVerify;
   const [keys, setKeys] = useState(() => {
     try {
       const s = JSON.parse(localStorage.getItem(API_KEYS_STORE) || "null");
@@ -243,10 +242,6 @@ export default function ApiPage({ embedded, onNavigate }) {
           </button>
         </div>
       </div>
-
-      {!embedded && typeof onNavigate === "function" && (
-        <button className="api-btn" style={{ marginLeft: 0 }} onClick={() => onNavigate("settings")}>← Back to settings</button>
-      )}
 
       {verify && (
         <ChainedVerify

@@ -228,9 +228,6 @@ body{background:#121218;font-family:'JetBrains Mono',ui-monospace,monospace}
 .st-2fa-step-num--pending{background:rgba(255,255,255,.04);color:rgba(255,255,255,.2);border:1px solid rgba(255,255,255,.06)}
 .st-2fa-qr{width:140px;height:140px;border-radius:10px;background:rgba(255,255,255,.95);display:flex;align-items:center;justify-content:center;margin:12px auto}
 .st-2fa-secret{font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:600;letter-spacing:.12em;color:rgba(99,102,241,.8);background:rgba(99,102,241,.08);border:1px solid rgba(99,102,241,.15);border-radius:6px;padding:6px 10px;text-align:center;user-select:all}
-.st-2fa-code-row{display:flex;gap:6px;justify-content:center}
-.st-2fa-code-input{width:36px;height:42px;text-align:center;font-family:'JetBrains Mono',monospace;font-size:18px;font-weight:700;color:rgba(255,255,255,.9);background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.1);border-radius:8px;outline:none;transition:border-color 150ms}
-.st-2fa-code-input:focus{border-color:rgba(99,102,241,.5)}
 
 .st-session-row{display:flex;align-items:center;gap:12px;padding:12px 20px;border-bottom:1px solid rgba(255,255,255,.04)}
 .st-session-row:last-child{border-bottom:none}
@@ -270,8 +267,6 @@ body{background:#121218;font-family:'JetBrains Mono',ui-monospace,monospace}
    (2FA inputs, QR) so it isn't clipped, and keep dropdowns on-screen. */
 @media(max-width:300px){
   .st-kyc-modal{min-width:0}
-  .st-2fa-code-row{gap:4px}
-  .st-2fa-code-input{width:28px;height:38px;font-size:15px}
   .st-2fa-qr{width:120px;height:120px}
   .st-kyc-qr-grid{grid-template-columns:repeat(21,6px);grid-template-rows:repeat(21,6px);width:126px;height:126px}
   .st-kyc-qr-cell{width:6px;height:6px}
@@ -1313,108 +1308,11 @@ function SessionsModal({ onClose }) {
 // ═══════════════════════════════════════════════════════════════════
 const MOCK_2FA_SECRET = "JBSW Y3DP EHPK 3PXP";
 
-// Reusable 6-digit code input + verify logic
-function TwoFaCodeInput({ onVerified, validate, successLabel = "Code verified" }) {
-  const [code, setCode] = useState(["","","","","",""]);
-  const [error, setError] = useState("");
-  const [verified, setVerified] = useState(false);
-  const [shaking, setShaking] = useState(false);
-  const inputsRef = useRef([]);
-  const resetTimer = useRef(null);
-
-  const tryVerify = (digits) => {
-    const full = digits.join("");
-    if (full.length < 6) return;
-    // validate is optional — if provided, must return true to accept
-    if (validate && !validate(full)) {
-      setError("Incorrect code. Try again.");
-      setShaking(true);
-      resetTimer.current = setTimeout(() => {
-        setShaking(false);
-        setCode(["","","","","",""]);
-        setError("");
-        inputsRef.current[0]?.focus();
-      }, 800);
-      return;
-    }
-    setVerified(true);
-    if (onVerified) setTimeout(() => onVerified(), 500);
-  };
-
-  useEffect(() => () => { if (resetTimer.current) clearTimeout(resetTimer.current); }, []);
-
-  const handleChange = (i, val) => {
-    if (verified || shaking) return;
-    if (val.length > 1) val = val.slice(-1);
-    if (val && !/^\d$/.test(val)) return;
-    setError("");
-    const next = [...code];
-    next[i] = val;
-    setCode(next);
-    if (val && i < 5) {
-      inputsRef.current[i + 1]?.focus();
-    }
-    if (val && i === 5) {
-      tryVerify(next);
-    }
-  };
-
-  const handleKey = (i, e) => {
-    if (verified || shaking) return;
-    if (e.key === "Backspace" && !code[i] && i > 0) {
-      inputsRef.current[i - 1]?.focus();
-    }
-  };
-
-  const handlePaste = (e) => {
-    if (verified || shaking) return;
-    e.preventDefault();
-    const pasted = e.clipboardData.getData("text").replace(/\D/g, "").slice(0, 6);
-    if (!pasted) return;
-    const next = [...code];
-    for (let i = 0; i < 6; i++) next[i] = pasted[i] || "";
-    setCode(next);
-    if (pasted.length === 6) {
-      tryVerify(next);
-    } else {
-      inputsRef.current[Math.min(pasted.length, 5)]?.focus();
-    }
-  };
-
-  const errorStyle = shaking ? { borderColor: "rgba(248,113,113,.6)", color: "rgba(248,113,113,.9)" } : {};
-  const successStyle = verified ? { borderColor: "rgba(74,222,128,.5)", color: "rgba(74,222,128,.9)" } : {};
-
-  return (
-    <div>
-      <div className="st-2fa-code-row" onPaste={handlePaste}>
-        {code.map((d, i) => (
-          <input
-            key={i}
-            ref={el => inputsRef.current[i] = el}
-            type="text"
-            inputMode="numeric"
-            maxLength={1}
-            className="st-2fa-code-input"
-            value={d}
-            onChange={e => handleChange(i, e.target.value)}
-            onKeyDown={e => handleKey(i, e)}
-            autoFocus={i === 0}
-            disabled={verified}
-            style={{ ...errorStyle, ...successStyle }}
-          />
-        ))}
-      </div>
-      {error && <div className="st-pw-error" style={{ textAlign: "center", marginTop: 8 }}>{error}</div>}
-      {verified && <div style={{ textAlign: "center", marginTop: 10, fontSize: 12, color: "rgba(74,222,128,.8)", fontWeight: 600 }}>✓ {successLabel}</div>}
-    </div>
-  );
-}
-
-// Chained verification gate (email code → authenticator code) lives in shared.js
-// so Settings and the API page share one implementation. Alias keeps JSX usage.
-const ChainedVerifyModal = window.HxChainedVerify;
+// The 6-digit code input now lives in shared.js (window.HxCodeInput); the local
+// TwoFaCodeInput was removed and TwoFaSetupModal's OTP step uses the shared one.
 
 function TwoFaSetupModal({ onComplete, onClose }) {
+  const HxCodeInput = window.HxCodeInput; // shared; resolved at render time
   const [step, setStep] = useState(1); // 1=scan, 2=confirm key, 3=OTP
   const [secretInput, setSecretInput] = useState("");
   const [secretError, setSecretError] = useState("");
@@ -1549,7 +1447,7 @@ function TwoFaSetupModal({ onComplete, onClose }) {
               <div style={{ fontSize: 11, color: "rgba(255,255,255,.4)", marginBottom: 16, lineHeight: 1.5, letterSpacing: ".02em" }}>
                 Enter the 6-digit code from your authenticator app to verify setup.
               </div>
-              <TwoFaCodeInput onVerified={onComplete} successLabel="2FA enabled" />
+              <HxCodeInput label="2FA enabled" onVerified={onComplete} />
             </div>
           )}
         </div>
@@ -1624,6 +1522,9 @@ function SoundSettingsModal({ sounds, onChange, onClose }) {
 // ═══════════════════════════════════════════════════════════════════
 export default function SettingsPage({ embedded = false, onNavigate }) {
   useEffect(() => { injectSettingsCSS(); }, []);
+  // Resolve the shared chained-verify modal at render time (shared.js has loaded
+  // by now) so a script-order change can't leave it undefined at module eval.
+  const ChainedVerifyModal = window.HxChainedVerify;
 
   const [pageLoading, setPageLoading] = useState(() => getAnimScale() > 0);
   useEffect(() => {
@@ -1712,6 +1613,7 @@ export default function SettingsPage({ embedded = false, onNavigate }) {
       {verifyAction && (
         <ChainedVerifyModal
           title={verifyAction === "disable-2fa" ? "Disable Two-Factor Auth" : "Change Password"}
+          requireTwoFa={verifyAction === "disable-2fa" ? true : twoFa}
           onVerified={() => {
             const action = verifyAction;
             setVerifyAction(null);
@@ -1793,7 +1695,7 @@ export default function SettingsPage({ embedded = false, onNavigate }) {
             </div>
           )}
 
-          <div className="st-row" onClick={() => { if (twoFa) setVerifyAction("change-pw"); else setPwModalOpen(true); }} style={{ cursor: "pointer" }}>
+          <div className="st-row" onClick={() => setVerifyAction("change-pw")} style={{ cursor: "pointer" }}>
             <div className="st-row-left">
               <span className="st-row-label">Change password</span>
             </div>

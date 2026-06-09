@@ -199,7 +199,7 @@ function validateWithdrawAddress(address, network) {
 // Every withdrawal requires the full second-factor chain (2FA → email),
 // regardless of size. Kept as a function so a size threshold could be
 // reintroduced here later without touching the SendModal flow.
-function is2faRequired(usdVal) {
+function is2faRequired() {
   return true;
 }
 
@@ -1275,7 +1275,7 @@ function SendModal({ onClose, onBack, onSubmitted, rates, initialCoin, balances 
   const amtNum = parseFloat(amount) || 0;
   const usdVal = amtNum * rate;
   const fee = network?.fee || "0.001";
-  const need2fa = is2faRequired(usdVal);
+  const need2fa = is2faRequired();
   const flowSteps = need2fa
     ? ["Details", "Review", "2FA", "Email", "Confirm"]
     : ["Details", "Review", "Email", "Confirm"];
