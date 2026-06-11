@@ -236,7 +236,7 @@ function tpBookSide(ticker, side, mid, tickN) {
 // ═══════════════════════════════════════════════════════════════════
 // CandleChart — hand-rolled canvas candlesticks + volume + crosshair
 // ═══════════════════════════════════════════════════════════════════
-const CandleChart = React.memo(function CandleChart({ ticker, candles, lastPrice }) {
+const CandleChart = React.memo(function CandleChart({ ticker, candles, lastPrice, res }) {
   const canvasRef = useRef(null);
   const wrapRef = useRef(null);
   const hoverRef = useRef(null);
@@ -383,7 +383,7 @@ const CandleChart = React.memo(function CandleChart({ ticker, candles, lastPrice
             <span>C <b style={{ color: hc.close >= hc.open ? "#4ade80" : "#f87171" }}>{tpFmt(hc.close)}</b></span>
           </>
         ) : (
-          <span>{ticker}/USDT · 5m · live</span>
+          <span>{ticker}/USDT · {res || "5m"} · live</span>
         )}
       </div>
     </div>
@@ -541,6 +541,31 @@ function TradePage({ embedded, onNavigate }) {
   // sim-seeded history shows a cliff down/up to the live price)
   const liveSeededRef = useRef(false);
   useEffect(() => { liveSeededRef.current = false; }, [pair]);
+
+  // Live mode: real OHLCV history from /chart (1h candles, epoch-second range)
+  const [chartRes, setChartRes] = useState("5m");
+  useEffect(() => {
+    if (!live) { setChartRes("5m"); return; }
+    let stopped = false;
+    const to = Math.floor(Date.now() / 1000);
+    const from = to - 64 * 3600;
+    window.HxApi.getChart(liveSymbol, "1h", from, to).then(rows => {
+      if (stopped || !Array.isArray(rows)) return;
+      const seen = new Set();
+      const cs = [];
+      rows.forEach(r => {
+        if (!r || !(r.close > 0) || seen.has(r.time)) return;
+        seen.add(r.time);
+        cs.push({ open: r.open, high: r.high, low: r.low, close: r.close, vol: r.volume || 0.05 });
+      });
+      if (cs.length < 3) return;
+      liveSeededRef.current = true;
+      candleTickRef.current = 0;
+      setCandles(cs.slice(-64));
+      setChartRes("1h");
+    }).catch(() => {});
+    return () => { stopped = true; };
+  }, [live, liveSymbol]);
 
   // Live feed: extend candles, synthesize trades, fill limit orders
   useEffect(() => {
@@ -788,6 +813,29 @@ function TradePage({ embedded, onNavigate }) {
     if (typeof playSaveSound === "function") playSaveSound();
   };
 
+  // Real closed orders for the History tab (live + signed in)
+  const [liveClosed, setLiveClosed] = useState(null);
+  useEffect(() => {
+    if (!(live && authed)) { setLiveClosed(null); return; }
+    if (ordersTab !== "history") return;
+    let stopped = false;
+    window.HxApi.getOrders(false).then(d => {
+      if (stopped) return;
+      const arr = Array.isArray(d && d.data) ? d.data : Array.isArray(d) ? d : [];
+      setLiveClosed(arr.map(o => ({
+        id: o.id,
+        side: o.side,
+        type: o.type,
+        price: Number(o.average_price) > 0 ? Number(o.average_price) : (Number(o.price) || 0),
+        amount: o.size,
+        pair: (o.symbol || "").split("-")[0].toUpperCase() || pair,
+        status: /cancel/i.test(String(o.status)) ? "cancelled" : "filled",
+      })));
+    }).catch(() => {});
+    return () => { stopped = true; };
+  }, [live, authed, ordersTab, pair]);
+  const historyRows = (live && authed) ? (liveClosed || []) : orderHistory;
+
   // Orders panel rows: real open orders when live + signed in, else the sim ones
   const openRows = (live && authed && liveOrders)
     ? liveOrders.map(o => ({
@@ -913,7 +961,7 @@ function TradePage({ embedded, onNavigate }) {
       {/* Chart + book + trades */}
       <div className="tp-grid">
         <div className="tp-panel">
-          <CandleChart ticker={pair} candles={candles} lastPrice={price} />
+          <CandleChart ticker={pair} candles={candles} lastPrice={price} res={chartRes} />
         </div>
 
         <div className="tp-panel tp-book-panel">
@@ -1044,7 +1092,7 @@ function TradePage({ embedded, onNavigate }) {
               {live && authed && <span className="tp-src-badge tp-src-badge--live">LIVE</span>}
             </button>
             <button className={"tp-orders-tab" + (ordersTab === "history" ? " tp-orders-tab--on" : "")} onClick={() => setOrdersTab("history")}>
-              History<span className="tp-orders-count">({orderHistory.length})</span>
+              History<span className="tp-orders-count">({historyRows.length})</span>
             </button>
           </div>
 
@@ -1052,7 +1100,7 @@ function TradePage({ embedded, onNavigate }) {
             <span>Side</span><span>Type</span><span>Price</span><span>Amount</span><span className="tp-order-col-total">Total</span><span style={{ textAlign: "right" }}>{ordersTab === "open" ? "" : "Status"}</span>
           </div>
 
-          {(ordersTab === "open" ? openRows : orderHistory.slice(0, 12)).map(o => (
+          {(ordersTab === "open" ? openRows : historyRows.slice(0, 12)).map(o => (
             <div key={o.id} className="tp-order-row">
               <span className={"tp-order-side--" + o.side}>{o.side.toUpperCase()}</span>
               <span style={{ color: "rgba(255,255,255,.45)", textTransform: "capitalize" }}>{o.type}</span>
@@ -1067,7 +1115,7 @@ function TradePage({ embedded, onNavigate }) {
             </div>
           ))}
 
-          {(ordersTab === "open" ? openRows : orderHistory).length === 0 && window.EmptyState &&
+          {(ordersTab === "open" ? openRows : historyRows).length === 0 && window.EmptyState &&
             React.createElement(window.EmptyState, {
               icon: ordersTab === "open" ? "◷" : "≡",
               title: ordersTab === "open" ? "No open orders" : "No orders yet",

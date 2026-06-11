@@ -698,7 +698,25 @@ const PERIODS = ["7D", "1M", "3M"];
 const PERIOD_POINTS = { "7D": 80, "1M": 80, "3M": 80 };
 const PERIOD_VOL    = { "7D": 0.012, "1M": 0.035, "3M": 0.06 };
 
-const SparkChart = React.memo(function SparkChart({ total, period, isUp, onToggle, height = null, gridClip = 0.55 }) {
+// Slice a real {at, total} series down to a period window; falls back to the
+// whole series when the window has too few points (sparse history)
+const PERIOD_DAYS = { "7D": 7, "1M": 30, "3M": 90 };
+function filterSeriesByPeriod(full, period) {
+  if (!full || full.length < 3) return null;
+  const cutoff = Date.now() - (PERIOD_DAYS[period] || 7) * 86400000;
+  const pts = full.filter(r => r.at >= cutoff).map(r => r.total);
+  return pts.length > 2 ? pts : full.map(r => r.total);
+}
+
+// Resample a series to N points (linear pick — fine for chart display)
+function resampleSeries(src, points) {
+  if (src.length <= points) return src.slice();
+  const out = [];
+  for (let i = 0; i < points; i++) out.push(src[Math.round(i * (src.length - 1) / (points - 1))]);
+  return out;
+}
+
+const SparkChart = React.memo(function SparkChart({ total, period, isUp, onToggle, height = null, gridClip = 0.55, realSeries = null }) {
   const canvasRef = useRef(null);
   const gridCanvasRef = useRef(null);
   const dataRef = useRef({});
@@ -834,18 +852,34 @@ const SparkChart = React.memo(function SparkChart({ total, period, isUp, onToggl
     return () => { cancelAnimationFrame(gridRafRef.current); gridRO.disconnect(); };
   }, []);
 
+  // Real series (live session) replaces the synthetic seed; reseed whenever
+  // it changes. The cliff guard reseeds if the total jumps >35% in one tick
+  // (e.g. demo balances → real balances) so the chart never shows a fake dive.
+  const realSeriesRef = useRef(null);
+  const seedPeriod = (p) => {
+    dataRef.current[p] = (realSeries && realSeries.length > 2)
+      ? resampleSeries(realSeries, PERIOD_POINTS[p])
+      : genChartData(total, PERIOD_POINTS[p], PERIOD_VOL[p]);
+  };
   useEffect(() => {
-    if (!dataRef.current[period]) {
-      dataRef.current[period] = genChartData(total, PERIOD_POINTS[period], PERIOD_VOL[period]);
+    if (realSeriesRef.current !== realSeries) {
+      realSeriesRef.current = realSeries;
+      dataRef.current = {};
     }
+    if (!dataRef.current[period]) seedPeriod(period);
     if (prevTotal.current !== total) {
+      const last = prevTotal.current;
       prevTotal.current = total;
-      const arr = dataRef.current[period];
-      arr.push(total);
-      if (arr.length > PERIOD_POINTS[period] + 40) arr.shift();
+      if (last != null && last > 0 && Math.abs(total - last) / last > 0.2) {
+        seedPeriod(period);
+      } else {
+        const arr = dataRef.current[period];
+        arr.push(total);
+        if (arr.length > PERIOD_POINTS[period] + 40) arr.shift();
+      }
       valueTickedRef.current = true;
     }
-  }, [total, period]);
+  }, [total, period, realSeries]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -1752,9 +1786,19 @@ function DusterModal({ onClose, balances, rates, onConvert }) {
 // ═══════════════════════════════════════════════════════════════════
 // Enlarged Chart Modal
 // ═══════════════════════════════════════════════════════════════════
-function EnlargedChartModal({ onClose, total, defaultPeriod }) {
+function EnlargedChartModal({ onClose, total, defaultPeriod, realSeriesFull = null }) {
   const [period, setPeriod] = useState(defaultPeriod || "7D");
-  const pct = PERIOD_PNL_PCT[period] || 0;
+  const series = useMemo(() => filterSeriesByPeriod(realSeriesFull, period), [realSeriesFull, period]);
+  // Actual start timestamp of the visible window (real data) for date labels
+  const winStart = useMemo(() => {
+    if (!realSeriesFull || realSeriesFull.length < 3) return null;
+    const cutoff = Date.now() - (PERIOD_DAYS[period] || 7) * 86400000;
+    const pts = realSeriesFull.filter(r => r.at >= cutoff);
+    return (pts.length > 2 ? pts : realSeriesFull)[0].at;
+  }, [realSeriesFull, period]);
+  const pct = (series && series.length > 1 && series[0] > 0)
+    ? ((total - series[0]) / series[0]) * 100
+    : (PERIOD_PNL_PCT[period] || 0);
   const pnl = total * (pct / 100);
   const isUp = pnl >= 0;
   const dir = isUp ? "up" : "down";
@@ -1777,14 +1821,17 @@ function EnlargedChartModal({ onClose, total, defaultPeriod }) {
           ))}
         </div>
         <div style={{ borderRadius: 10, overflow: "hidden", background: "#0d0814", border: "1px solid rgba(255,255,255,.06)" }}>
-          <SparkChart total={total} period={period} isUp={isUp}
+          <SparkChart total={total} period={period} isUp={isUp} realSeries={series}
             height={Math.min(600, Math.max(280, Math.round(window.innerHeight * 0.55)))}
             gridClip={0.8} />
         </div>
         <div style={{ display: "flex", justifyContent: "space-between", marginTop: 12, fontSize: 9, color: "rgba(255,255,255,.25)", fontWeight: 600, fontFamily: "ui-monospace,'Courier New',monospace", paddingRight: 68 }}>
           {(() => {
             const now = new Date();
-            const days = period === "7D" ? 7 : period === "1M" ? 30 : 90;
+            // Real data → label from the actual window the series covers
+            const days = winStart
+              ? Math.max(1, (Date.now() - winStart) / 86400000)
+              : period === "7D" ? 7 : period === "1M" ? 30 : 90;
             const count = period === "7D" ? 8 : period === "1M" ? 6 : 7;
             const fmt = (d) => d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
             return Array.from({ length: count }, (_, i) => {
@@ -2651,6 +2698,11 @@ export default function WalletPage({ embedded = false, onNavigate, initialCoin, 
   const [balances, setBalances] = useState(() =>
     Object.fromEntries(Object.entries(COINS).map(([t, info]) => [t, info.balance]))
   );
+  // Real session extras: holds (balance − available) and the real portfolio
+  // value series for the chart; null = demo mode
+  const [realHolds, setRealHolds] = useState(null);
+  const [realSeries, setRealSeries] = useState(null);
+  const getHold = (ticker, info) => (realHolds ? (realHolds[ticker] || 0) : info.hold);
   // Activity log is appendable (dust conversion prepends a row). MOCK_ACTIVITY
   // is the initial seed; subsequent rows get IDs from nextTxIdRef.
   const [activity, setActivity] = useState(MOCK_ACTIVITY);
@@ -2735,7 +2787,13 @@ export default function WalletPage({ embedded = false, onNavigate, initialCoin, 
     Object.entries(COINS).reduce((s, [t, info]) => s + balances[t] * getUSDRate(rates, t), 0),
   [rates, balances]);
 
-  const activePnlPct = PERIOD_PNL_PCT[period] || 0;
+  // Real session with history → slice the series to the selected period and
+  // compute PnL from it; demo % otherwise. Memoized so the chart's reseed
+  // check (reference identity) doesn't fire on every render.
+  const chartSeries = useMemo(() => filterSeriesByPeriod(realSeries, period), [realSeries, period]);
+  const activePnlPct = (chartSeries && chartSeries.length > 1 && chartSeries[0] > 0)
+    ? ((total - chartSeries[0]) / chartSeries[0]) * 100
+    : (PERIOD_PNL_PCT[period] || 0);
   const activePnl    = total * (activePnlPct / 100);
   const pnlDir       = activePnl > 0.005 ? "up" : activePnl < -0.005 ? "down" : "flat";
 
@@ -2775,10 +2833,10 @@ export default function WalletPage({ embedded = false, onNavigate, initialCoin, 
       .sort(([aT, aI], [bT, bI]) => {
         if (assetSort.col === "name")    return dir * aT.localeCompare(bT);
         if (assetSort.col === "balance") return dir * (balances[aT] - balances[bT]);
-        if (assetSort.col === "hold")    return dir * (aI.hold - bI.hold);
+        if (assetSort.col === "hold")    return dir * (getHold(aT, aI) - getHold(bT, bI));
         return dir * (balances[aT] * getUSDRate(rates, aT) - balances[bT] * getUSDRate(rates, bT));
       });
-  }, [hideZero, assetSearch, assetSort, balances, rates]);
+  }, [hideZero, assetSearch, assetSort, balances, rates, realHolds]);
 
   // ── Effects ────────────────────────────────────────────────────
   useEffect(injectWalletCSS, []);
@@ -2794,29 +2852,102 @@ export default function WalletPage({ embedded = false, onNavigate, initialCoin, 
     return window.HxMarket.subscribe((m) => setRates(m.getRates()));
   }, []);
 
-  // Live exchange mode + signed in → show real balances from /user/balance
-  // (available amounts; refreshed on auth/live changes and every 20s)
+  // Real session (live mode + signed in) → EVERYTHING real: balances and
+  // holds from /user/balance, activity from /user/trades + /user/deposits +
+  // /user/withdrawals, and the portfolio chart from /user/balance-history.
+  // Signing out restores the demo data so the prototype still demos well.
   useEffect(() => {
     let stopped = false;
     let intervalId = null;
+    let usingReal = false;
+
     const loadReal = () => {
-      if (!(window.HxApi && window.HxApi.isLive() && window.HxApi.isAuthed())) return;
+      if (!window.hxIsRealSession()) return;
+      usingReal = true;
+
       window.HxApi.getBalance().then(real => {
         if (stopped) return;
         setBalances(prev => {
           const next = { ...prev };
-          Object.keys(COINS).forEach(t => {
-            next[t] = real[t] ? real[t].available : 0;
-          });
+          Object.keys(COINS).forEach(t => { next[t] = real[t] ? real[t].available : 0; });
           return next;
         });
+        setRealHolds(() => {
+          const h = {};
+          Object.keys(COINS).forEach(t => { h[t] = real[t] ? real[t].hold : 0; });
+          return h;
+        });
       }).catch(() => {});
+
+      // Portfolio value series (oldest → newest, with timestamps) for the chart
+      window.HxApi.request("/user/balance-history?limit=100").then(d => {
+        if (stopped) return;
+        const rows = Array.isArray(d && d.data) ? d.data : Array.isArray(d) ? d : [];
+        const series = rows
+          .map(r => ({ total: Number(r.total), at: new Date(r.created_at || r.timestamp || 0).getTime() }))
+          .filter(r => Number.isFinite(r.total) && r.total >= 0 && r.at > 0)
+          .sort((a, b) => a.at - b.at);
+        setRealSeries(series.length > 2 ? series : null);
+      }).catch(() => { if (!stopped) setRealSeries(null); });
+
+      // Real activity: trades + deposits + withdrawals, newest first
+      const mapTx = (cat) => (r, i) => {
+        const coin = String(r.currency || "").toUpperCase();
+        const amt = Number(r.amount) || 0;
+        const usd = amt * (coin === "USDT" ? 1 : window.HxMarket.getPrice(coin) || 0);
+        return {
+          id: `lv-${cat}-${r.id != null ? r.id : i}`,
+          cat,
+          coin,
+          amount: fmtBal(amt, 6),
+          usd: addCommas(usd.toFixed(2)),
+          time: window.hxFmtWhen(r.created_at),
+          _at: new Date(r.created_at || 0).getTime(),
+          status: r.status === true ? "confirmed" : (r.rejected || r.dismissed) ? "failed" : "pending",
+          hash: String(r.transaction_id || "").slice(0, 10),
+        };
+      };
+      Promise.all([
+        window.HxApi.request("/user/trades?limit=25").catch(() => null),
+        window.HxApi.request("/user/deposits?limit=25").catch(() => null),
+        window.HxApi.request("/user/withdrawals?limit=25").catch(() => null),
+      ]).then(([tr, dep, wd]) => {
+        if (stopped) return;
+        const rows = [];
+        (Array.isArray(tr && tr.data) ? tr.data : []).forEach((r, i) => {
+          const base = String(r.symbol || "").split("-")[0].toUpperCase();
+          const size = Number(r.size) || 0;
+          rows.push({
+            id: `lv-trade-${i}-${r.timestamp || ""}`,
+            cat: r.side === "buy" ? "buy" : "sell",
+            coin: base,
+            amount: fmtBal(size, 6),
+            usd: addCommas((size * (Number(r.price) || 0)).toFixed(2)),
+            time: window.hxFmtWhen(r.timestamp),
+            _at: new Date(r.timestamp || 0).getTime(),
+            status: "confirmed",
+            hash: "",
+          });
+        });
+        (Array.isArray(dep && dep.data) ? dep.data : []).forEach((r, i) => rows.push(mapTx("deposit")(r, i)));
+        (Array.isArray(wd && wd.data) ? wd.data : []).forEach((r, i) => rows.push(mapTx("withdraw")(r, i)));
+        rows.sort((a, b) => b._at - a._at);
+        if (rows.length) setActivity(rows);
+        else setActivity([]);
+      });
     };
+
     const sync = () => {
       if (intervalId) { clearInterval(intervalId); intervalId = null; }
-      if (window.HxApi && window.HxApi.isLive() && window.HxApi.isAuthed()) {
+      if (window.hxIsRealSession()) {
         loadReal();
         intervalId = setInterval(loadReal, 20000);
+      } else if (usingReal) {
+        usingReal = false;
+        setBalances(Object.fromEntries(Object.entries(COINS).map(([t, info]) => [t, info.balance])));
+        setRealHolds(null);
+        setRealSeries(null);
+        setActivity(MOCK_ACTIVITY);
       }
     };
     sync();
@@ -3023,7 +3154,7 @@ export default function WalletPage({ embedded = false, onNavigate, initialCoin, 
           </div>
           <div onMouseEnter={() => setShowPeriodDrop(false)}>
             <SparkChart total={total} period={period} isUp={pnlDir !== "down"}
-              onToggle={openBigChart} />
+              realSeries={chartSeries} onToggle={openBigChart} />
           </div>
         </div>
 
@@ -3112,8 +3243,8 @@ export default function WalletPage({ embedded = false, onNavigate, initialCoin, 
                       {isZero ? <span style={{ color: "rgba(255,255,255,.2)", fontSize: 11 }}>—</span>
                         : <>{fmtBal(balances[ticker], info.decimals)} <span style={{ fontSize: 9, color: "rgba(255,255,255,.25)" }}>{ticker}</span></>}
                     </div>
-                    <div className="wl-td" style={{ textAlign: "right", whiteSpace: "nowrap", color: info.hold > 0 ? "rgba(255,255,255,.5)" : "rgba(255,255,255,.2)" }}>
-                      {info.hold > 0 ? <>{fmtBal(info.hold, info.decimals)} <span style={{ fontSize: 9, opacity: 0.7 }}>{ticker}</span></> : "—"}
+                    <div className="wl-td" style={{ textAlign: "right", whiteSpace: "nowrap", color: getHold(ticker, info) > 0 ? "rgba(255,255,255,.5)" : "rgba(255,255,255,.2)" }}>
+                      {getHold(ticker, info) > 0 ? <>{fmtBal(getHold(ticker, info), info.decimals)} <span style={{ fontSize: 9, opacity: 0.7 }}>{ticker}</span></> : "—"}
                     </div>
                     <div className="wl-td wl-td--val" style={{ textAlign: "right" }}>
                       {isZero
@@ -3130,7 +3261,7 @@ export default function WalletPage({ embedded = false, onNavigate, initialCoin, 
       </div>
 
       {showBigChart && (
-        <EnlargedChartModal onClose={() => setShowBigChart(false)} total={total} defaultPeriod="3M" />
+        <EnlargedChartModal onClose={() => setShowBigChart(false)} total={total} defaultPeriod="3M" realSeriesFull={realSeries} />
       )}
       {modal && (
         <div className="wl-overlay" onClick={e => e.target === e.currentTarget && closeAllModals()}>

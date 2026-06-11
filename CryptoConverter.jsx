@@ -2312,6 +2312,48 @@ export default function CryptoConverter() {
     Object.fromEntries(Object.entries(CONVERTER_COINS).map(([k, v]) => [k, v.balance]))
   );
 
+  // Live exchange mode + signed in → real balances from /user/balance
+  // (available amounts; refreshed every 20s and on live/auth changes;
+  //  demo balances restored on sign-out)
+  useEffect(() => {
+    let stopped = false;
+    let intervalId = null;
+    let usingReal = false;
+    const loadReal = () => {
+      if (!(window.HxApi && window.HxApi.isLive() && window.HxApi.isAuthed())) return;
+      window.HxApi.getBalance().then(real => {
+        if (stopped) return;
+        usingReal = true;
+        setBalances(prev => {
+          const next = { ...prev };
+          Object.keys(CONVERTER_COINS).forEach(t => {
+            next[t] = real[t] ? real[t].available : 0;
+          });
+          return next;
+        });
+      }).catch(() => {});
+    };
+    const sync = () => {
+      if (intervalId) { clearInterval(intervalId); intervalId = null; }
+      if (window.HxApi && window.HxApi.isLive() && window.HxApi.isAuthed()) {
+        loadReal();
+        intervalId = setInterval(loadReal, 20000);
+      } else if (usingReal) {
+        usingReal = false;
+        setBalances(Object.fromEntries(Object.entries(CONVERTER_COINS).map(([k, v]) => [k, v.balance])));
+      }
+    };
+    sync();
+    window.addEventListener("hx-live-change", sync);
+    window.addEventListener("hx-auth-change", sync);
+    return () => {
+      stopped = true;
+      if (intervalId) clearInterval(intervalId);
+      window.removeEventListener("hx-live-change", sync);
+      window.removeEventListener("hx-auth-change", sync);
+    };
+  }, []);
+
   // ── Notification type config ──
   const NOTIF_TYPES = useMemo(() => ({
     incoming:   { label: "Incoming",   color: "110,200,160", icon: "arrow-down",   autoNext: "deposit" },
@@ -2474,8 +2516,22 @@ export default function CryptoConverter() {
     if (depositTimerRef.current) clearTimeout(depositTimerRef.current);
   }, []);
 
-  // Demo notifications: showcase all transaction types
+  // Real session → no fake notifications: clear any queued demo ones on
+  // sign-in (price alerts still arrive — those are real)
   useEffect(() => {
+    const h = () => { if (window.hxIsRealSession()) setNotifications([]); };
+    h();
+    window.addEventListener("hx-auth-change", h);
+    window.addEventListener("hx-live-change", h);
+    return () => {
+      window.removeEventListener("hx-auth-change", h);
+      window.removeEventListener("hx-live-change", h);
+    };
+  }, []);
+
+  // Demo notifications: showcase all transaction types (demo sessions only)
+  useEffect(() => {
+    if (window.hxIsRealSession()) return;
     const timers = [
       setTimeout(() => pushNotif("deposit",   "0.0420 BTC",          180),  1500),
       setTimeout(() => pushNotif("incoming",  "12,000,000.50 KRW",     0),  4500),

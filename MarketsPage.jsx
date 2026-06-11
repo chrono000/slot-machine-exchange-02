@@ -66,6 +66,15 @@ function getMarketCap(rates, ticker) {
   return getMkPrice(rates, ticker) * supply;
 }
 
+// 24h volume in USD: real exchange volume (base units × price) when the live
+// feed covers this coin, mock figure otherwise
+function getMkVolume(ticker) {
+  const M = window.HxMarket;
+  const tk = M.getLiveTicker ? M.getLiveTicker(ticker) : null;
+  if (tk && tk.volume > 0) return tk.volume * (M.getPrice(ticker) || 0);
+  return MOCK_VOLUME[ticker] ?? 0;
+}
+
 function fmtSupply(n) {
   if (n >= 1_000_000_000) return (n / 1_000_000_000).toFixed(2) + "B";
   if (n >= 1_000_000)     return (n / 1_000_000).toFixed(2) + "M";
@@ -598,7 +607,7 @@ function NavBar({ active }) {
 // ═══════════════════════════════════════════════════════════════════
 function SummaryBar({ rates }) {
   const totalCap = COIN_RANKS.reduce((sum, t) => sum + getMkPrice(rates, t) * MOCK_SUPPLY[t], 0);
-  const totalVol = COIN_RANKS.reduce((sum, t) => sum + MOCK_VOLUME[t], 0);
+  const totalVol = COIN_RANKS.reduce((sum, t) => sum + getMkVolume(t), 0);
   const btcDom   = totalCap > 0
     ? ((getMkPrice(rates, "BTC") * MOCK_SUPPLY["BTC"] / totalCap) * 100).toFixed(1)
     : "0.0";
@@ -693,7 +702,7 @@ const MarketRow = React.memo(function MarketRow({ ticker, rank, price, mcap, fla
   const info      = COINS[ticker];
   const change24h = MOCK_CHANGES[ticker] ?? 0;
   const change7d  = MOCK_7D_CHANGE[ticker] ?? 0;
-  const volume    = MOCK_VOLUME[ticker] ?? 0;
+  const volume    = getMkVolume(ticker);
   const isUp7d    = change7d >= 0;
 
   const priceCls = "mk-price mk-cell-right mk-col-num" +
@@ -900,7 +909,7 @@ const CoinCard = React.memo(function CoinCard({ ticker, price, flash, sparkData,
             </div>
             <div className="mk-exp-stat">
               <div className="mk-exp-stat-label">Volume 24h</div>
-              <div className="mk-exp-stat-val">{fmtUSD(MOCK_VOLUME[ticker], true)}</div>
+              <div className="mk-exp-stat-val">{fmtUSD(getMkVolume(ticker), true)}</div>
             </div>
             <div className="mk-exp-stat">
               <div className="mk-exp-stat-label">7d Change</div>
@@ -1151,7 +1160,7 @@ function ExpandedCard({ ticker, rates, onClose, onTrade, onWalletAction }) {
         </div>
         <div className="mk-exp-stat">
           <div className="mk-exp-stat-label">Volume 24h</div>
-          <div className="mk-exp-stat-val">{fmtUSD(MOCK_VOLUME[ticker], true)}</div>
+          <div className="mk-exp-stat-val">{fmtUSD(getMkVolume(ticker), true)}</div>
         </div>
         <div className="mk-exp-stat">
           <div className="mk-exp-stat-label">7d Change</div>
@@ -1368,7 +1377,7 @@ function CoinDetailModal({ ticker, rates, sparkData, isFav, onStar, onClose, onT
           </div>
           <div className="mk-exp-stat">
             <div className="mk-exp-stat-label">Volume 24h</div>
-            <div className="mk-exp-stat-val">{fmtUSD(MOCK_VOLUME[ticker], true)}</div>
+            <div className="mk-exp-stat-val">{fmtUSD(getMkVolume(ticker), true)}</div>
           </div>
           <div className="mk-exp-stat">
             <div className="mk-exp-stat-label">{period} Change</div>
@@ -1501,7 +1510,7 @@ export default function MarketsPage({ embedded = false, onWalletAction, onBuyCon
     } else if (filter === "losers") {
       list.sort((a, b) => (MOCK_CHANGES[a] ?? 0) - (MOCK_CHANGES[b] ?? 0));
     } else if (filter === "volume") {
-      list.sort((a, b) => (MOCK_VOLUME[b] ?? 0) - (MOCK_VOLUME[a] ?? 0));
+      list.sort((a, b) => getMkVolume(b) - getMkVolume(a));
     }
     const q = search.trim().toLowerCase();
     if (q) list = list.filter(t => t.toLowerCase().includes(q) || COINS[t].name.toLowerCase().includes(q));

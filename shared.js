@@ -533,6 +533,26 @@ window.HxApi = (function () {
   return api;
 })();
 
+// True when live mode is on AND the user is signed in to the real exchange.
+// Every surface shows ONLY real data in this state; the demo/mock data is
+// for signed-out sessions so the prototype still demos well.
+window.hxIsRealSession = function () {
+  return !!(window.HxApi && window.HxApi.isLive() && window.HxApi.isAuthed());
+};
+
+// "2026-06-11T04:45:17.651Z" → "Jun 11 4:45 AM" (for activity rows)
+window.hxFmtWhen = function (iso) {
+  try {
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return String(iso || "");
+    var months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    var h = d.getHours(), ampm = h >= 12 ? "PM" : "AM";
+    h = h % 12; if (h === 0) h = 12;
+    var m = String(d.getMinutes()).padStart(2, "0");
+    return months[d.getMonth()] + " " + d.getDate() + " " + h + ":" + m + " " + ampm;
+  } catch (e) { return String(iso || ""); }
+};
+
 // ═══════════════════════════════════════════════════════════════════
 // HxAlerts — one-shot price alerts checked against the HxMarket feed
 // ───────────────────────────────────────────────────────────────────
