@@ -206,6 +206,7 @@ function is2faRequired() {
 const WL_CSS_ID = "wl-styles";
 
 // Utilities (getUSDRate, addCommas, fmtUSD, fmtPrice, fmtBal from shared.js)
+const HxRoll = window.HxRoll; // rolling-digit display (shared.js)
 
 // genChartData from shared.js
 
@@ -2623,7 +2624,7 @@ const NOTIF_PHASE_TO_CAT = {
 
 export default function WalletPage({ embedded = false, onNavigate, initialCoin, initialAction, initialRouteKey = 0, highlightNotif, onNavigateToConvert, onRouteChange }) {
   // ── State ──────────────────────────────────────────────────────
-  const [rates, setRates]             = useState({ ...BASE_RATES });
+  const [rates, setRates]             = useState(() => window.HxMarket.getRates());
   const [period, setPeriod]           = useState("7D");
   const [modal, setModal]             = useState(null);
   const [modalReturn, setModalReturn] = useState(null);
@@ -2788,18 +2789,9 @@ export default function WalletPage({ embedded = false, onNavigate, initialCoin, 
     return () => clearTimeout(t);
   }, []);
 
-  // Live rate ticker (every 3.5s)
+  // Live rate ticker — single shared HxMarket feed (all pages in sync)
   useEffect(() => {
-    const id = setInterval(() => {
-      setRates(prev => {
-        const next = {};
-        for (const [k, v] of Object.entries(prev)) {
-          next[k] = Math.round(v * (1 + (Math.random() - 0.48) * 0.004) * 100) / 100;
-        }
-        return next;
-      });
-    }, 3500);
-    return () => clearInterval(id);
+    return window.HxMarket.subscribe((m) => setRates(m.getRates()));
   }, []);
 
   // Bar segments: mount at flex:0, expand on next frame
@@ -2819,7 +2811,9 @@ export default function WalletPage({ embedded = false, onNavigate, initialCoin, 
       const countDuration = animMs(COUNTUP_MS);
       const start  = performance.now();
       const tick = (now) => {
-        const p    = Math.min((now - start) / countDuration, 1);
+        // Clamp both ends: under headless/virtual clocks rAF timestamps can
+        // land before `start`, and a negative p makes 2p² explode.
+        const p    = Math.min(Math.max((now - start) / countDuration, 0), 1);
         const ease = p < 0.5 ? 2*p*p : -1+(4-2*p)*p;
         setCountTotal(total * ease);
         if (p < 1) countRef.current = requestAnimationFrame(tick);
@@ -2890,12 +2884,22 @@ export default function WalletPage({ embedded = false, onNavigate, initialCoin, 
           <div className="wl-head-main" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
             <div style={{ position: "relative" }}>
               <div className="hx-sk" style={{ height: 36, width: 200, borderRadius: 6, position: "absolute", top: 0, left: 0, opacity: pageLoading ? 1 : 0, transition: "opacity 300ms ease", pointerEvents: "none" }} />
+              {/* Live total: digits roll on each tick (HxRoll); the green/red
+                  pulse is a color transition driven by flashDir instead of the
+                  old keyed-remount keyframe (a remount would reset the reels). */}
               <div
-                key={countDone ? flashKey : "counting"}
-                className={"wl-total-value" + (flashDir === "up" ? " wl-flash-up" : flashDir === "down" ? " wl-flash-down" : "")}
-                style={{ opacity: pageLoading ? 0 : 1, transition: "opacity 200ms ease" }}
+                key={countDone ? "live" : "counting"}
+                className="wl-total-value"
+                style={{
+                  opacity: pageLoading ? 0 : 1,
+                  transition: "opacity 200ms ease, color 280ms ease",
+                  color: flashDir === "up" ? COLOR_UP : flashDir === "down" ? COLOR_DOWN : undefined,
+                }}
               >
-                {fmtUSD(countDone ? total : countTotal, true)}
+                {countDone
+                  ? <HxRoll value={fmtUSD(total, true)}
+                      dir={prevTotal.current === null || total === prevTotal.current ? null : total > prevTotal.current ? "up" : "down"} />
+                  : fmtUSD(countTotal, true)}
               </div>
             </div>
             <div className="wl-head-actions" style={{ display: "flex", flexDirection: "column", gap: 3, alignItems: "flex-end", flexShrink: 0, opacity: pageLoading ? 0 : 1, transition: "opacity 400ms ease" }}>

@@ -53,6 +53,7 @@ const COIN_RANKS = ["BTC","ETH","USDT","SOL","BNB","XRP","USDC","ADA","DOGE","AV
 
 
 // Utilities (getUSDRate, addCommas, fmtUSD, fmtPrice from shared.js)
+const HxRoll = window.HxRoll; // rolling-digit price display (shared.js)
 
 function getMkPrice(rates, ticker) {
   const live = getUSDRate(rates, ticker);
@@ -716,7 +717,7 @@ const MarketRow = React.memo(function MarketRow({ ticker, rank, price, mcap, fla
           <div className="mk-coin-ticker">{ticker}</div>
         </div>
       </div>
-      <div className={priceCls}>{fmtPrice(price)}</div>
+      <div className={priceCls}><HxRoll value={fmtPrice(price)} dir={flash} /></div>
       <div className="mk-cell-right mk-col-num mk-col-24h">
         <ChangeCell pct={change24h} />
       </div>
@@ -882,7 +883,7 @@ const CoinCard = React.memo(function CoinCard({ ticker, price, flash, sparkData,
 
       {/* Price row — always visible */}
       <div className="mk-card-price-row">
-        <div className={"mk-card-price-morph" + (isExpanded && !isClosing ? " mk-card-price-morph--expanded" : " mk-card-price-morph--compact") + priceColorCls + flashCls}>{fmtPrice(price)}</div>
+        <div className={"mk-card-price-morph" + (isExpanded && !isClosing ? " mk-card-price-morph--expanded" : " mk-card-price-morph--compact") + priceColorCls + flashCls}><HxRoll value={fmtPrice(price)} dir={flash} /></div>
         <span className={"mk-card-badge " + badgeCls}>{prefix}{change24.toFixed(2)}% <span style={{opacity:.6,fontSize:9,marginLeft:2}}>24h</span></span>
       </div>
 
@@ -1409,7 +1410,7 @@ export default function MarketsPage({ embedded = false, onWalletAction, onBuyCon
     return () => window.removeEventListener("hx-flow-preview", onFlow);
   }, []);
 
-  const [rates, setRates] = useState(BASE_RATES);
+  const [rates, setRates] = useState(() => window.HxMarket.getRates());
   const [flashMap, setFlashMap] = useState({});
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("all");
@@ -1461,27 +1462,19 @@ export default function MarketsPage({ embedded = false, onWalletAction, onBuyCon
     return data;
   });
 
-  // Live ticking — same 3500ms interval as WalletPage
-  const ratesRef = useRef(BASE_RATES);
+  // Live ticking — single shared HxMarket feed (all coins, all pages in sync)
+  const flashTimerRef = useRef(null);
   useEffect(() => {
-    const TICK_KEYS = { BTC: "BTC/USDT", ETH: "ETH/USDT", SOL: "SOL/USDT", BNB: "BNB/USDT", XRP: "XRP/USDT", USDC: "USDC/USDT" };
-    const id = setInterval(() => {
-      const prev = ratesRef.current;
-      const next = { ...prev };
-      const newFlash = {};
-      Object.entries(TICK_KEYS).forEach(([ticker, key]) => {
-        const old = prev[key] || 1;
-        const delta = old * 0.0012 * (Math.random() - 0.48);
-        const nv = Math.max(old + delta, old * 0.9);
-        next[key] = nv;
-        newFlash[ticker] = nv > old ? "up" : nv < old ? "down" : null;
-      });
-      ratesRef.current = next;
-      setRates(next);
-      setFlashMap(newFlash);
-      setTimeout(() => setFlashMap({}), animMs(550));
-    }, 3500);
-    return () => clearInterval(id);
+    const unsub = window.HxMarket.subscribe((m) => {
+      setRates(m.getRates());
+      setFlashMap(m.getDirs());
+      if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
+      flashTimerRef.current = setTimeout(() => setFlashMap({}), animMs(550));
+    });
+    return () => {
+      unsub();
+      if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
+    };
   }, []);
 
   // Trade: navigate to Convert with coin pre-selected

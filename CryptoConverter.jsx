@@ -497,6 +497,18 @@ const STYLE_CSS = `
 .cv-notch--explore:hover .cv-tab--active{color:rgba(255,255,255,.88)}
 .cv-tab:hover{color:rgba(255,255,255,.55)}
 .cv-tab--active{color:rgba(255,255,255,.88)}
+.cv-tape{position:fixed;left:0;right:0;bottom:0;height:30px;display:flex;align-items:center;overflow:hidden;background:rgba(10,10,16,.92);backdrop-filter:blur(10px);border-top:1px solid rgba(255,255,255,.06);z-index:1150;font-size:11px;font-family:'JetBrains Mono',ui-monospace,monospace}
+.cv-tape__group{display:flex;align-items:center;flex-shrink:0;min-width:max-content;animation:cvTapeScroll 70s linear infinite}
+.cv-tape:hover .cv-tape__group{animation-play-state:paused}
+@keyframes cvTapeScroll{from{transform:translateX(0)}to{transform:translateX(-100%)}}
+.cv-tape__item{display:inline-flex;align-items:center;gap:7px;padding:0 18px;height:30px;border:0;border-right:1px solid rgba(255,255,255,.05);background:transparent;color:inherit;font-family:inherit;font-size:inherit;cursor:pointer;white-space:nowrap;transition:background 140ms}
+.cv-tape__item:hover{background:rgba(255,255,255,.05)}
+.cv-tape__sym{font-weight:700;letter-spacing:.05em;font-size:10px}
+.cv-tape__price{color:rgba(255,255,255,.85);font-weight:600}
+.cv-tape__chg{font-size:10px;font-weight:600;letter-spacing:.02em}
+.cv-tape__chg--up{color:#4ade80}
+.cv-tape__chg--down{color:#f87171}
+@media(max-width:520px){.cv-tape__item{padding:0 12px;gap:5px}}
 .cv-notif{z-index:2;display:flex;align-items:center;margin-left:-3px;padding:4px;cursor:pointer;transition:padding 320ms cubic-bezier(.22,1,.36,1)}
 .cv-notch--explore .cv-notif{padding:2px}
 .cv-notch--explore:hover .cv-notif{padding:4px}
@@ -1644,6 +1656,42 @@ const STABLES = new Set(["USDT", "USDC"]);
 
 // BASE_RATES loaded from shared.js
 
+// ═══════════════════════════════════════════════════════════════════
+// TickerTape — bottom-of-screen scrolling market strip, fed by HxMarket
+// ═══════════════════════════════════════════════════════════════════
+const TICKER_TAPE_COINS = ["BTC", "ETH", "SOL", "BNB", "XRP", "ADA", "DOGE", "AVAX", "POL", "HYPE", "XMR"];
+const HxRoll = window.HxRoll;
+
+const TickerTape = React.memo(function TickerTape({ onSelect }) {
+  const [, setTick] = useState(0);
+  useEffect(() => window.HxMarket.subscribe(() => setTick(n => n + 1)), []);
+  const M = window.HxMarket;
+  // Two identical groups (second aria-hidden) make the marquee loop seamless.
+  const renderGroup = (suffix, hidden) => (
+    <div className="cv-tape__group" aria-hidden={hidden || undefined}>
+      {TICKER_TAPE_COINS.map(t => {
+        const ch = M.getChange(t);
+        return (
+          <button key={t + suffix} type="button" className="cv-tape__item" tabIndex={hidden ? -1 : 0}
+            onClick={() => onSelect && onSelect(t)} title={`Trade ${t}`}>
+            <span className="cv-tape__sym" style={{ color: COINS[t]?.color }}>{t}</span>
+            <HxRoll className="cv-tape__price" value={fmtPrice(M.getPrice(t))} dir={M.getDir(t)} />
+            <span className={"cv-tape__chg " + (ch >= 0 ? "cv-tape__chg--up" : "cv-tape__chg--down")}>
+              {(ch >= 0 ? "+" : "") + ch.toFixed(2) + "%"}
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+  return (
+    <div className="cv-tape" aria-label="Live market prices">
+      {renderGroup("a", false)}
+      {renderGroup("b", true)}
+    </div>
+  );
+});
+
 function getRate(rates, from, to) {
   if (from === to) return 1;
   const k1 = `${from}/${to}`, k2 = `${to}/${from}`;
@@ -2253,7 +2301,7 @@ export default function CryptoConverter() {
   const morphRectsRef = useRef(null);
   const pairKey = `${buyAsset}/${spendAsset}`;
   const prevPairKeyRef = useRef(pairKey);
-  const [rates, setRates] = useState(BASE_RATES);
+  const [rates, setRates] = useState(() => window.HxMarket.getRates());
   const [rateDir, setRateDir] = useState(null);
   const [rateLoading, setRateLoading] = useState(true);
   const [flowPreview, setFlowPreview] = useState(() => (typeof window.getFlowPreview === "function" ? window.getFlowPreview() : "none"));
@@ -2739,20 +2787,13 @@ export default function CryptoConverter() {
     return () => clearTimeout(t);
   }, [buyAsset, spendAsset]);
 
-  // Live rate ticker
+  // Live rate ticker — single shared HxMarket feed, so every page agrees
   useEffect(() => {
-    const id = setInterval(() => {
-      setRates(prev => {
-        const next = {};
-        for (const [k, v] of Object.entries(prev)) {
-          next[k] = Math.round(v * (1 + (Math.random() - 0.48) * 0.003) * 100) / 100;
-        }
-        const rk = `${spendAsset}/USDT`;
-        if (next[rk] && prev[rk]) setRateDir(next[rk] > prev[rk] ? "up" : "down");
-        return next;
-      });
-    }, 7000);
-    return () => clearInterval(id);
+    return window.HxMarket.subscribe((m) => {
+      setRates(m.getRates());
+      const d = m.getDir(spendAsset);
+      if (d) setRateDir(d);
+    });
   }, [spendAsset, buyAsset]);
 
   const rate = getRate(rates, spendAsset, buyAsset);
@@ -3211,7 +3252,7 @@ export default function CryptoConverter() {
   }
 
   return (
-    <div className="cv-app" style={{ minHeight: "100vh", background: "#16161e", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-start", padding: "max(90px,calc(env(safe-area-inset-top,0px) + 72px)) max(16px,env(safe-area-inset-right,0px)) max(48px,env(safe-area-inset-bottom,0px)) max(16px,env(safe-area-inset-left,0px))", fontFamily: "'JetBrains Mono',ui-monospace,monospace" }}>
+    <div className="cv-app" style={{ minHeight: "100vh", background: "#16161e", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-start", padding: "max(90px,calc(env(safe-area-inset-top,0px) + 72px)) max(16px,env(safe-area-inset-right,0px)) max(82px,calc(env(safe-area-inset-bottom,0px) + 34px)) max(16px,env(safe-area-inset-left,0px))", fontFamily: "'JetBrains Mono',ui-monospace,monospace" }}>
       <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
 
       <div className="cv-shell" style={{ position: "relative" }}>
@@ -3557,6 +3598,12 @@ export default function CryptoConverter() {
           })()}
         </div>
       </div>
+
+      {/* Live market ticker tape — fixed to the bottom edge, visible on every tab */}
+      <TickerTape onSelect={(t) => {
+        if (CONVERTER_COINS[t] && t !== spendAsset) handleBuyConvert(t);
+        else switchTab("markets");
+      }} />
 
     </div>
   );

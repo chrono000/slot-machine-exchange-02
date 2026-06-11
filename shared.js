@@ -252,6 +252,184 @@ window.genChartData = function genChartData(endVal, points, volatility) {
   return data;
 };
 
+// ═══════════════════════════════════════════════════════════════════
+// HxMarket — the single live mock price feed
+// ───────────────────────────────────────────────────────────────────
+// One seeded random-walk engine for every coin in COINS. Pages used to run
+// their own unsynchronized jitter intervals (Converter 7s, Wallet 3.5s,
+// Markets 3.5s) so prices disagreed across tabs; now everything subscribes
+// here and stays consistent. 24h changes are kept coherent with the walk by
+// deriving them from a fixed 24h-open price (and MOCK_CHANGES is updated in
+// place so existing badge code stays correct). Ticks pause while the tab is
+// hidden; the interval only runs while at least one subscriber is mounted.
+// ═══════════════════════════════════════════════════════════════════
+window.HxMarket = (function () {
+  var STATIC_PRICES = { ADA: 0.4521, DOGE: 0.1234, AVAX: 35.42, POL: 0.5831, HYPE: 22.14 };
+  var VOL = { default: 0.0014, USDC: 0.00004 };
+  var TICK_MS = 3500;
+  var HISTORY_LEN = 120;
+
+  var prices = {}, basePrices = {}, open24h = {}, dirs = {}, history = {};
+
+  Object.keys(window.COINS).forEach(function (t) {
+    var p = t === "USDT" ? 1 : (window.BASE_RATES[t + "/USDT"] || STATIC_PRICES[t] || 0);
+    prices[t] = p;
+    basePrices[t] = p;
+    var ch = (window.MOCK_CHANGES && typeof window.MOCK_CHANGES[t] === "number") ? window.MOCK_CHANGES[t] : 0;
+    open24h[t] = ch === 0 ? p : p / (1 + ch / 100);
+    dirs[t] = null;
+    // Seeded backstory so per-coin history is stable across reloads
+    var rand = window.makeSeededRand("hxm-" + t);
+    var h = [p];
+    for (var i = 1; i < HISTORY_LEN; i++) {
+      var prev = h[0];
+      h.unshift(Math.max(prev * (1 - (rand() - 0.48) * 0.008), p * 0.88));
+    }
+    history[t] = h;
+  });
+
+  var listeners = new Set();
+  var timer = null;
+
+  function tick() {
+    if (document.hidden) return;
+    Object.keys(prices).forEach(function (t) {
+      if (t === "USDT") return;
+      var old = prices[t];
+      if (!old) return;
+      // Random walk with a gentle pull back toward the base price so the
+      // demo can run for hours without drifting into nonsense.
+      var vol = VOL[t] || VOL.default;
+      var drift = (Math.random() - 0.48) * vol + ((basePrices[t] - old) / basePrices[t]) * 0.002;
+      var nv = old * (1 + drift);
+      prices[t] = nv;
+      dirs[t] = nv > old ? "up" : nv < old ? "down" : null;
+      var h = history[t];
+      h.push(nv);
+      if (h.length > HISTORY_LEN) h.shift();
+      if (window.MOCK_CHANGES && typeof window.MOCK_CHANGES[t] === "number") {
+        window.MOCK_CHANGES[t] = (nv / open24h[t] - 1) * 100;
+      }
+    });
+    listeners.forEach(function (fn) { try { fn(api); } catch (e) {} });
+  }
+
+  var api = {
+    TICK_MS: TICK_MS,
+    getPrice: function (t) { return prices[t] || 0; },
+    getDir: function (t) { return dirs[t] || null; },
+    getDirs: function () { return Object.assign({}, dirs); },
+    getChange: function (t) {
+      if (prices[t] && open24h[t]) return (prices[t] / open24h[t] - 1) * 100;
+      return (window.MOCK_CHANGES && window.MOCK_CHANGES[t]) || 0;
+    },
+    getHistory: function (t) { return (history[t] || []).slice(); },
+    // BASE_RATES-shaped object ("BTC/USDT": price) covering every coin —
+    // a drop-in replacement for each page's `rates` state.
+    getRates: function () {
+      var r = {};
+      Object.keys(prices).forEach(function (t) { if (t !== "USDT") r[t + "/USDT"] = prices[t]; });
+      return r;
+    },
+    subscribe: function (fn) {
+      listeners.add(fn);
+      if (!timer) timer = setInterval(tick, TICK_MS);
+      return function () {
+        listeners.delete(fn);
+        if (listeners.size === 0 && timer) { clearInterval(timer); timer = null; }
+      };
+    },
+  };
+  return api;
+})();
+
+// ═══════════════════════════════════════════════════════════════════
+// HxRoll — lightweight rolling-digit display for live numbers
+// ───────────────────────────────────────────────────────────────────
+// A slimmed-down cousin of the converter's DigitRoll for places that show
+// many small live numbers (ticker tape, markets rows, card prices). Each
+// digit that changes does a one-cell vertical reel slide in the tick
+// direction; punctuation stays static. Em-based so it inherits font size.
+// props: value (string), dir ("up" | "down" | null), className.
+// ═══════════════════════════════════════════════════════════════════
+(function injectHxRollCSS() {
+  if (document.getElementById("hx-roll-css")) return;
+  var st = document.createElement("style");
+  st.id = "hx-roll-css";
+  st.textContent =
+    ".hx-roll{display:inline-flex;align-items:center;font-variant-numeric:tabular-nums;line-height:1}" +
+    ".hx-roll__digit{display:inline-block;width:1ch;height:1em;overflow:hidden;position:relative}" +
+    ".hx-roll__track{display:block;transition-property:transform;transition-timing-function:var(--hx-easing,cubic-bezier(.2,.8,.2,1));will-change:transform}" +
+    ".hx-roll__track--no{transition:none}" +
+    ".hx-roll__cell{display:grid;place-items:center;height:1em;width:1ch}" +
+    ".hx-roll__static{display:inline-grid;place-items:center;height:1em}";
+  var add = function () { document.head.appendChild(st); };
+  if (document.head) add(); else document.addEventListener("DOMContentLoaded", add);
+})();
+
+window.HxRollDigit = React.memo(function HxRollDigit(props) {
+  var ch = props.ch, dir = props.dir || null;
+  var st = React.useState({ stack: [props.ch], pos: 0, anim: false });
+  var state = st[0], setState = st[1];
+  var prevRef = React.useRef(props.ch);
+  var rafRef = React.useRef(null);
+
+  React.useLayoutEffect(function () {
+    var prev = prevRef.current;
+    if (prev === ch) return;
+    prevRef.current = ch;
+    if (!dir || !window.isAnimOn || !window.isAnimOn()) {
+      setState({ stack: [ch], pos: 0, anim: false });
+      return;
+    }
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    if (dir === "up") {
+      // Reel rolls upward: old digit on top, new slides in from below
+      setState({ stack: [prev, ch], pos: 0, anim: false });
+      rafRef.current = requestAnimationFrame(function () {
+        setState({ stack: [prev, ch], pos: 1, anim: true });
+      });
+    } else {
+      // Reel rolls downward: new digit on top, old slides out below
+      setState({ stack: [ch, prev], pos: 1, anim: false });
+      rafRef.current = requestAnimationFrame(function () {
+        setState({ stack: [ch, prev], pos: 0, anim: true });
+      });
+    }
+  }, [ch, dir]);
+
+  React.useEffect(function () {
+    return function () { if (rafRef.current) cancelAnimationFrame(rafRef.current); };
+  }, []);
+
+  function settle() { setState({ stack: [prevRef.current], pos: 0, anim: false }); }
+
+  return React.createElement("span", { className: "hx-roll__digit" },
+    React.createElement("span", {
+      className: "hx-roll__track" + (state.anim ? "" : " hx-roll__track--no"),
+      style: { transform: "translateY(" + (-state.pos) + "em)", transitionDuration: window.animMs(360) + "ms" },
+      onTransitionEnd: settle,
+    }, state.stack.map(function (c, i) {
+      return React.createElement("span", { key: i, className: "hx-roll__cell" }, c);
+    }))
+  );
+});
+
+window.HxRoll = React.memo(function HxRoll(props) {
+  var value = String(props.value == null ? "" : props.value);
+  var dir = props.dir || null;
+  var chars = value.split("");
+  var n = chars.length;
+  return React.createElement("span", { className: "hx-roll" + (props.className ? " " + props.className : "") },
+    chars.map(function (c, i) {
+      // Key from the right so prices keep digit identity when length changes
+      var key = "p" + (n - 1 - i);
+      if (c >= "0" && c <= "9") return React.createElement(window.HxRollDigit, { key: key, ch: c, dir: dir });
+      return React.createElement("span", { key: key + c, className: "hx-roll__static" }, c);
+    })
+  );
+});
+
 // ── Page Registry ──
 window.AppPages = {
   _pages: [],
