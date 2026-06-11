@@ -2326,6 +2326,7 @@ export default function CryptoConverter() {
     unstaked:   { label: "Unstaked",   color: "200,160,255", icon: "lock" },
     reward:     { label: "Reward",     color: "255,210,80",  icon: "star" },
     withdrawn:  { label: "Withdrawn",  color: "180,180,200", icon: "bank" },
+    alert:      { label: "Price alert", color: "255,210,80", icon: "star" },
     failed:     { label: "Failed",     color: "220,90,90",   icon: "x-circle" },
     rejected:   { label: "Rejected",   color: "220,90,90",   icon: "x-circle" },
     error:      { label: "Error",      color: "220,90,90",   icon: "x-circle" },
@@ -2410,6 +2411,18 @@ export default function CryptoConverter() {
     const id = ++notifIdRef.current;
     setNotifications(prev => [...prev, { id, phase, amount, elapsed, detail }]);
   }, []);
+
+  // Price alerts (HxAlerts in shared.js) land in the notch queue
+  useEffect(() => {
+    return window.HxAlerts.onFire((a) => {
+      pushNotif(
+        "alert",
+        `${a.ticker} ${a.condition === "above" ? "≥" : "≤"} ${fmtPrice(a.price)}`,
+        0,
+        `now ${fmtPrice(a.firedPrice)}`
+      );
+    });
+  }, [pushNotif]);
 
   // Expose for test trigger from Settings sound modal
   useEffect(() => {

@@ -91,6 +91,28 @@ function tpBookSide(ticker, side, mid, tickN) {
 .tp-stat-val{font-size:12px;font-weight:600;color:rgba(255,255,255,.78);font-variant-numeric:tabular-nums}
 .tp-stat-val--up{color:#4ade80}.tp-stat-val--down{color:#f87171}
 
+/* Alerts */
+.tp-alert-btn{position:relative;display:flex;align-items:center;gap:6px;margin-left:auto;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.09);border-radius:10px;padding:7px 12px;cursor:pointer;font-family:inherit;color:rgba(255,255,255,.6);font-size:11px;font-weight:600;letter-spacing:.03em;transition:all 140ms}
+.tp-alert-btn:hover{background:rgba(255,255,255,.08);color:rgba(255,255,255,.85)}
+.tp-alert-badge{min-width:15px;height:15px;border-radius:8px;background:rgba(255,210,80,.9);color:#1a1405;font-size:9px;font-weight:700;display:flex;align-items:center;justify-content:center;padding:0 4px}
+.tp-alert-menu{position:absolute;top:calc(100% + 6px);right:0;z-index:60;width:264px;background:rgba(16,16,24,.97);border:1px solid rgba(255,255,255,.1);border-radius:12px;padding:12px;box-shadow:0 18px 60px rgba(0,0,0,.5)}
+.tp-alert-title{font-size:10px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:rgba(255,255,255,.4);margin-bottom:10px}
+.tp-alert-cond-row{display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-bottom:8px}
+.tp-alert-cond{height:26px;border-radius:7px;border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.02);color:rgba(255,255,255,.4);font-family:inherit;font-size:10px;font-weight:600;cursor:pointer;transition:all 120ms}
+.tp-alert-cond--on{background:rgba(255,210,80,.12);border-color:rgba(255,210,80,.4);color:rgba(255,210,80,.95)}
+.tp-alert-add-row{display:flex;gap:6px;margin-bottom:4px}
+.tp-alert-input{flex:1;height:32px;border-radius:8px;border:1px solid rgba(255,255,255,.1);background:rgba(255,255,255,.03);padding:0 10px;font-family:inherit;font-size:12px;font-weight:600;color:rgba(255,255,255,.9);outline:none;font-variant-numeric:tabular-nums;min-width:0}
+.tp-alert-input:focus{border-color:rgba(255,210,80,.4)}
+.tp-alert-add{height:32px;padding:0 12px;border-radius:8px;border:0;background:rgba(255,210,80,.85);color:#1a1405;font-family:inherit;font-size:11px;font-weight:700;cursor:pointer;transition:filter 130ms}
+.tp-alert-add:hover{filter:brightness(1.08)}
+.tp-alert-list{margin-top:10px;border-top:1px solid rgba(255,255,255,.07);padding-top:8px;max-height:170px;overflow-y:auto}
+.tp-alert-row{display:flex;align-items:center;gap:8px;padding:5px 2px;font-size:11px;font-variant-numeric:tabular-nums}
+.tp-alert-row-tk{font-weight:700;width:42px}
+.tp-alert-row-cond{color:rgba(255,255,255,.45);flex:1}
+.tp-alert-del{width:20px;height:20px;border-radius:6px;border:0;background:transparent;color:rgba(255,255,255,.3);font-size:11px;cursor:pointer;transition:all 120ms;flex-shrink:0}
+.tp-alert-del:hover{background:rgba(248,113,113,.12);color:rgba(248,113,113,.85)}
+.tp-alert-empty{font-size:10px;color:rgba(255,255,255,.28);text-align:center;padding:8px 0 4px;line-height:1.5}
+
 /* Pair dropdown */
 .tp-pair-menu{position:absolute;top:calc(100% + 6px);left:0;z-index:60;min-width:230px;background:rgba(16,16,24,.97);border:1px solid rgba(255,255,255,.1);border-radius:12px;padding:6px;box-shadow:0 18px 60px rgba(0,0,0,.5);max-height:320px;overflow-y:auto}
 .tp-pair-row{display:flex;align-items:center;gap:9px;width:100%;padding:8px 10px;border:0;border-radius:8px;background:transparent;cursor:pointer;font-family:inherit;color:rgba(255,255,255,.8);font-size:12px;transition:background 120ms}
@@ -590,6 +612,27 @@ function TradePage({ embedded, onNavigate }) {
   const [ordersTab, setOrdersTab] = useState("open");
   const info = COINS[pair];
 
+  // ── Price alerts ──
+  const [alerts, setAlerts] = useState(() => window.HxAlerts.getAll());
+  const [alertMenuOpen, setAlertMenuOpen] = useState(false);
+  const [alertCond, setAlertCond] = useState("above");
+  const [alertPrice, setAlertPrice] = useState("");
+  const alertMenuRef = useRef(null);
+  useEffect(() => window.HxAlerts.onChange(setAlerts), []);
+  useEffect(() => {
+    if (!alertMenuOpen) return;
+    const h = e => { if (alertMenuRef.current && !alertMenuRef.current.contains(e.target)) setAlertMenuOpen(false); };
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
+  }, [alertMenuOpen]);
+  const addAlert = () => {
+    const p = parseFloat(alertPrice);
+    if (!(p > 0)) return;
+    window.HxAlerts.add(pair, alertCond, p);
+    setAlertPrice("");
+    if (typeof playSaveSound === "function") playSaveSound();
+  };
+
   return (
     <div className="tp-root">
       {/* Header / stats */}
@@ -635,6 +678,41 @@ function TradePage({ embedded, onNavigate }) {
         <div className="tp-stat">
           <span className="tp-stat-label">24h volume</span>
           <span className="tp-stat-val">{fmtUSD(stats.vol, true)}</span>
+        </div>
+
+        <div style={{ position: "relative", marginLeft: "auto" }} ref={alertMenuRef}>
+          <button className="tp-alert-btn" style={{ marginLeft: 0 }} onClick={() => { setAlertMenuOpen(o => !o); setAlertPrice(price.toFixed(tpDecimals(price))); }}>
+            <span aria-hidden>🔔</span> Alerts
+            {alerts.length > 0 && <span className="tp-alert-badge">{alerts.length}</span>}
+          </button>
+          {alertMenuOpen && (
+            <div className="tp-alert-menu">
+              <div className="tp-alert-title">Alert me when {pair} is</div>
+              <div className="tp-alert-cond-row">
+                <button className={"tp-alert-cond" + (alertCond === "above" ? " tp-alert-cond--on" : "")} onClick={() => setAlertCond("above")}>▲ Above</button>
+                <button className={"tp-alert-cond" + (alertCond === "below" ? " tp-alert-cond--on" : "")} onClick={() => setAlertCond("below")}>▼ Below</button>
+              </div>
+              <div className="tp-alert-add-row">
+                <input className="tp-alert-input" type="text" inputMode="decimal" placeholder="Price (USDT)"
+                  value={alertPrice}
+                  onChange={e => { if (/^\d*\.?\d*$/.test(e.target.value)) setAlertPrice(e.target.value); }}
+                  onKeyDown={e => { if (e.key === "Enter") addAlert(); }} />
+                <button className="tp-alert-add" onClick={addAlert}>Add</button>
+              </div>
+              <div className="tp-alert-list">
+                {alerts.length === 0 && (
+                  <div className="tp-alert-empty">No active alerts.<br />They fire once, into the top notch.</div>
+                )}
+                {alerts.map(a => (
+                  <div key={a.id} className="tp-alert-row">
+                    <span className="tp-alert-row-tk" style={{ color: COINS[a.ticker] ? COINS[a.ticker].color : undefined }}>{a.ticker}</span>
+                    <span className="tp-alert-row-cond">{a.condition === "above" ? "≥" : "≤"} {tpFmt(a.price)}</span>
+                    <button className="tp-alert-del" onClick={() => window.HxAlerts.remove(a.id)} title="Delete alert">✕</button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </div>
 

@@ -344,6 +344,81 @@ window.HxMarket = (function () {
 })();
 
 // ═══════════════════════════════════════════════════════════════════
+// HxAlerts — one-shot price alerts checked against the HxMarket feed
+// ───────────────────────────────────────────────────────────────────
+// Alerts persist in localStorage and fire once when the live price
+// crosses the target ("above": price >= target, "below": price <=
+// target). Fired alerts are removed and broadcast to listeners — the
+// app shell forwards them into the notch notification queue.
+// ═══════════════════════════════════════════════════════════════════
+window.HxAlerts = (function () {
+  var KEY = "hx_price_alerts";
+  var alerts = [];
+  var nextId = 1;
+  try {
+    alerts = JSON.parse(localStorage.getItem(KEY) || "[]");
+    nextId = alerts.reduce(function (m, a) { return Math.max(m, a.id || 0); }, 0) + 1;
+  } catch (e) { alerts = []; }
+
+  var listeners = new Set();
+  var changeListeners = new Set();
+  var unsub = null;
+
+  function save() {
+    try { localStorage.setItem(KEY, JSON.stringify(alerts)); } catch (e) {}
+    changeListeners.forEach(function (fn) { try { fn(alerts.slice()); } catch (e) {} });
+  }
+
+  function check(m) {
+    if (!alerts.length) return;
+    var fired = [];
+    alerts = alerts.filter(function (a) {
+      var p = m.getPrice(a.ticker);
+      if (!p) return true;
+      var hit = a.condition === "above" ? p >= a.price : p <= a.price;
+      if (hit) { fired.push(Object.assign({ firedPrice: p }, a)); return false; }
+      return true;
+    });
+    if (fired.length) {
+      save();
+      fired.forEach(function (a) {
+        listeners.forEach(function (fn) { try { fn(a); } catch (e) {} });
+      });
+    }
+  }
+
+  function ensureWatching() {
+    if (!unsub && alerts.length) unsub = window.HxMarket.subscribe(check);
+    if (unsub && !alerts.length) { unsub(); unsub = null; }
+  }
+  ensureWatching();
+
+  return {
+    getAll: function () { return alerts.slice(); },
+    add: function (ticker, condition, price) {
+      alerts.push({ id: nextId++, ticker: ticker, condition: condition, price: price });
+      save();
+      ensureWatching();
+    },
+    remove: function (id) {
+      alerts = alerts.filter(function (a) { return a.id !== id; });
+      save();
+      ensureWatching();
+    },
+    // fn(alert) on fire; returns unsubscribe
+    onFire: function (fn) {
+      listeners.add(fn);
+      return function () { listeners.delete(fn); };
+    },
+    // fn(alerts) whenever the set changes; returns unsubscribe
+    onChange: function (fn) {
+      changeListeners.add(fn);
+      return function () { changeListeners.delete(fn); };
+    },
+  };
+})();
+
+// ═══════════════════════════════════════════════════════════════════
 // HxRoll — lightweight rolling-digit display for live numbers
 // ───────────────────────────────────────────────────────────────────
 // A slimmed-down cousin of the converter's DigitRoll for places that show
