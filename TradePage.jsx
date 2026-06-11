@@ -91,6 +91,22 @@ function tpBookSide(ticker, side, mid, tickN) {
 .tp-stat-val{font-size:12px;font-weight:600;color:rgba(255,255,255,.78);font-variant-numeric:tabular-nums}
 .tp-stat-val--up{color:#4ade80}.tp-stat-val--down{color:#f87171}
 
+/* Live mode */
+.tp-live-btn{display:flex;align-items:center;gap:6px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.09);border-radius:10px;padding:7px 12px;cursor:pointer;font-family:inherit;color:rgba(255,255,255,.55);font-size:11px;font-weight:700;letter-spacing:.06em;transition:all 140ms}
+.tp-live-btn:hover{background:rgba(255,255,255,.08)}
+.tp-live-btn--on{background:rgba(74,222,128,.1);border-color:rgba(74,222,128,.4);color:#4ade80}
+.tp-live-dot{width:7px;height:7px;border-radius:50%;background:rgba(255,255,255,.3);flex-shrink:0}
+.tp-live-btn--on .tp-live-dot{background:#4ade80;box-shadow:0 0 6px rgba(74,222,128,.7);animation:tpLivePulse 1.6s ease-in-out infinite}
+@keyframes tpLivePulse{0%,100%{opacity:1}50%{opacity:.45}}
+.tp-acct{display:flex;align-items:center;gap:8px;font-size:10px}
+.tp-acct-email{color:rgba(255,255,255,.5);max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tp-acct-out,.tp-acct-in{height:28px;padding:0 12px;border-radius:8px;border:1px solid rgba(255,255,255,.1);background:rgba(255,255,255,.04);color:rgba(255,255,255,.65);font-family:inherit;font-size:10px;font-weight:600;cursor:pointer;transition:all 130ms}
+.tp-acct-out:hover,.tp-acct-in:hover{background:rgba(255,255,255,.09);color:rgba(255,255,255,.9)}
+.tp-acct-in{border-color:rgba(74,222,128,.35);color:#4ade80}
+.tp-src-badge{font-size:8px;font-weight:700;letter-spacing:.08em;padding:2px 6px;border-radius:5px;margin-left:8px;vertical-align:middle}
+.tp-src-badge--live{background:rgba(74,222,128,.12);color:#4ade80}
+.tp-src-badge--sim{background:rgba(255,255,255,.06);color:rgba(255,255,255,.35)}
+
 /* Alerts */
 .tp-alert-btn{position:relative;display:flex;align-items:center;gap:6px;margin-left:auto;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.09);border-radius:10px;padding:7px 12px;cursor:pointer;font-family:inherit;color:rgba(255,255,255,.6);font-size:11px;font-weight:600;letter-spacing:.03em;transition:all 140ms}
 .tp-alert-btn:hover{background:rgba(255,255,255,.08);color:rgba(255,255,255,.85)}
@@ -430,6 +446,88 @@ function TradePage({ embedded, onNavigate }) {
   const price = M.getPrice(pair);
   const dir = M.getDir(pair);
   const change = M.getChange(pair);
+  const liveSymbol = pair.toLowerCase() + "-usdt";
+
+  // ── Live exchange mode (HxApi → api.hollaex.com) ──
+  const [live, setLive] = useState(() => window.HxApi.isLive());
+  const liveTicker = live ? M.getLiveTicker(pair) : null;
+  const [authed, setAuthed] = useState(() => window.HxApi.isAuthed());
+  const [liveUser, setLiveUser] = useState(() => window.HxApi.getCachedUser());
+  useEffect(() => {
+    const onLive = () => setLive(window.HxApi.isLive());
+    const onAuth = () => setAuthed(window.HxApi.isAuthed());
+    window.addEventListener("hx-live-change", onLive);
+    window.addEventListener("hx-auth-change", onAuth);
+    return () => {
+      window.removeEventListener("hx-live-change", onLive);
+      window.removeEventListener("hx-auth-change", onAuth);
+    };
+  }, []);
+  useEffect(() => {
+    if (live && authed) window.HxApi.getUser().then(setLiveUser).catch(() => {});
+    else setLiveUser(null);
+  }, [live, authed]);
+
+  // Real order book + trades for the current pair (poll while live)
+  const [liveBook, setLiveBook] = useState(null);
+  const [liveTrades, setLiveTrades] = useState(null);
+  useEffect(() => {
+    if (!live) { setLiveBook(null); setLiveTrades(null); return; }
+    let stopped = false;
+    const load = () => {
+      window.HxApi.getOrderbook(liveSymbol)
+        .then(d => { if (!stopped) setLiveBook(d && d[liveSymbol] && d[liveSymbol].bids ? d[liveSymbol] : null); })
+        .catch(() => { if (!stopped) setLiveBook(null); });
+      window.HxApi.getPublicTrades(liveSymbol)
+        .then(d => { if (!stopped) setLiveTrades(d && Array.isArray(d[liveSymbol]) ? d[liveSymbol] : null); })
+        .catch(() => { if (!stopped) setLiveTrades(null); });
+    };
+    load();
+    const id = setInterval(load, 5000);
+    return () => { stopped = true; clearInterval(id); };
+  }, [live, liveSymbol]);
+
+  // Real balances + open orders once signed in
+  const [liveBalances, setLiveBalances] = useState(null);
+  const [liveOrders, setLiveOrders] = useState(null);
+  const refreshLiveAccount = useCallback(() => {
+    if (!(window.HxApi.isLive() && window.HxApi.isAuthed())) return;
+    window.HxApi.getBalance().then(setLiveBalances).catch(() => {});
+    window.HxApi.getOrders(true)
+      .then(d => setLiveOrders(Array.isArray(d && d.data) ? d.data : Array.isArray(d) ? d : []))
+      .catch(err => { if (err && err.status === 401) window.HxApi.logout(); });
+  }, []);
+  useEffect(() => {
+    if (live && authed) {
+      refreshLiveAccount();
+      const id = setInterval(refreshLiveAccount, 10000);
+      return () => clearInterval(id);
+    }
+    setLiveBalances(null);
+    setLiveOrders(null);
+  }, [live, authed, refreshLiveAccount]);
+
+  // Login modal
+  const [loginOpen, setLoginOpen] = useState(false);
+  const [loginEmail, setLoginEmail] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
+  const [loginOtp, setLoginOtp] = useState("");
+  const [loginErr, setLoginErr] = useState("");
+  const [loginBusy, setLoginBusy] = useState(false);
+  const doLogin = () => {
+    if (loginBusy) return;
+    if (!loginEmail || !loginPassword) { setLoginErr("Email and password are required"); return; }
+    setLoginBusy(true);
+    setLoginErr("");
+    window.HxApi.login(loginEmail.trim(), loginPassword, loginOtp.trim() || undefined)
+      .then(() => {
+        setLoginOpen(false);
+        setLoginPassword(""); setLoginOtp("");
+        showToast("buy", "Signed in to live exchange");
+      })
+      .catch(e => setLoginErr(e.message || "Login failed"))
+      .then(() => setLoginBusy(false));
+  };
 
   // Pair switch: reseed candles/trades
   useEffect(() => {
@@ -439,11 +537,23 @@ function TradePage({ embedded, onNavigate }) {
     try { localStorage.setItem(TP_PAIR_KEY, pair); } catch (e) {}
   }, [pair]);
 
+  // Reseed candle history when the first real price arrives (otherwise the
+  // sim-seeded history shows a cliff down/up to the live price)
+  const liveSeededRef = useRef(false);
+  useEffect(() => { liveSeededRef.current = false; }, [pair]);
+
   // Live feed: extend candles, synthesize trades, fill limit orders
   useEffect(() => {
     return M.subscribe(m => {
       const p = m.getPrice(pair);
       setTickN(n => n + 1);
+
+      if (window.HxApi && window.HxApi.isLive() && m.isLiveData(pair) && !liveSeededRef.current) {
+        liveSeededRef.current = true;
+        candleTickRef.current = 0;
+        setCandles(tpSeedCandles(pair, 64));
+        return;
+      }
 
       // candles
       candleTickRef.current += 1;
@@ -535,9 +645,36 @@ function TradePage({ embedded, onNavigate }) {
     return { hi, lo, vol: vol * (price > 1000 ? 8e8 : price > 1 ? 5e7 : 8e6) };
   }, [candles, price]);
 
-  // Order book
-  const asks = useMemo(() => tpBookSide(pair, "ask", price, tickN), [pair, price, tickN]);
-  const bids = useMemo(() => tpBookSide(pair, "bid", price, tickN), [pair, price, tickN]);
+  // Order book — real levels when live (and the exchange lists this pair)
+  const asks = useMemo(() => {
+    if (live && liveBook && Array.isArray(liveBook.asks) && liveBook.asks.length) {
+      let cum = 0;
+      return liveBook.asks.slice(0, TP_BOOK_LEVELS).map(l => { cum += l[1]; return { price: l[0], size: l[1], cum }; });
+    }
+    return tpBookSide(pair, "ask", price, tickN);
+  }, [live, liveBook, pair, price, tickN]);
+  const bids = useMemo(() => {
+    if (live && liveBook && Array.isArray(liveBook.bids) && liveBook.bids.length) {
+      let cum = 0;
+      return liveBook.bids.slice(0, TP_BOOK_LEVELS).map(l => { cum += l[1]; return { price: l[0], size: l[1], cum }; });
+    }
+    return tpBookSide(pair, "bid", price, tickN);
+  }, [live, liveBook, pair, price, tickN]);
+
+  // Trades tape — real fills when live
+  const tradeRows = useMemo(() => {
+    if (live && liveTrades && liveTrades.length) {
+      return liveTrades.slice(0, 26).map((t, i) => ({
+        id: "lv" + i + (t.timestamp || ""),
+        side: t.side,
+        price: t.price,
+        size: t.size,
+        usd: t.price * t.size,
+        time: (t.timestamp || "").slice(11, 19) || "—",
+      }));
+    }
+    return trades;
+  }, [live, liveTrades, trades]);
   const maxCum = Math.max(asks[asks.length - 1].cum, bids[bids.length - 1].cum);
   const spread = asks[0].price - bids[0].price;
 
@@ -553,8 +690,10 @@ function TradePage({ embedded, onNavigate }) {
   const effPrice = type === "limit" && parseFloat(limitPrice) > 0 ? parseFloat(limitPrice) : price;
   const amt = parseFloat(amount) || 0;
   const totalUsd = amt * effPrice;
-  const availBase = balances[pair] || 0;
-  const availQuote = balances.USDT || 0;
+  // Live + signed in → real available balances from /user/balance
+  const usingLiveBalances = live && authed && liveBalances;
+  const availBase = usingLiveBalances ? ((liveBalances[pair] || {}).available || 0) : (balances[pair] || 0);
+  const availQuote = usingLiveBalances ? ((liveBalances.USDT || {}).available || 0) : (balances.USDT || 0);
 
   const setPct = pct => {
     if (side === "sell") {
@@ -571,6 +710,22 @@ function TradePage({ embedded, onNavigate }) {
     if (side === "buy" && totalUsd > availQuote) { setTicketErr("Insufficient USDT balance"); return; }
     if (side === "sell" && amt > availBase) { setTicketErr(`Insufficient ${pair} balance`); return; }
     setTicketErr("");
+
+    // Live mode: place the order on the real exchange
+    if (live) {
+      if (!authed) { setLoginOpen(true); return; }
+      const o = { symbol: liveSymbol, side, size: amt, type };
+      if (type === "limit") o.price = parseFloat(limitPrice);
+      window.HxApi.placeOrder(o)
+        .then(() => {
+          showToast(side, `${type === "market" ? (side === "buy" ? "Bought" : "Sold") : `Limit ${side} placed`} · ${fmtBal(amt, 6)} ${pair} (live)`);
+          if (typeof playSaveSound === "function") playSaveSound();
+          setAmount("");
+          refreshLiveAccount();
+        })
+        .catch(e => setTicketErr(e.message || "Order failed"));
+      return;
+    }
     const id = orderIdRef.current++;
     const stamp = new Date().toTimeString().slice(0, 8);
 
@@ -633,6 +788,28 @@ function TradePage({ embedded, onNavigate }) {
     if (typeof playSaveSound === "function") playSaveSound();
   };
 
+  // Orders panel rows: real open orders when live + signed in, else the sim ones
+  const openRows = (live && authed && liveOrders)
+    ? liveOrders.map(o => ({
+        id: o.id,
+        side: o.side,
+        type: o.type,
+        price: o.price || 0,
+        amount: o.size,
+        pair: (o.symbol || "").split("-")[0].toUpperCase() || pair,
+        isLive: true,
+      }))
+    : openOrders;
+  const cancelOrderRow = (o) => {
+    if (o.isLive) {
+      window.HxApi.cancelOrder(o.id)
+        .then(() => { showToast("sell", "Order cancelled (live)"); refreshLiveAccount(); })
+        .catch(e => showToast("sell", "Cancel failed: " + (e.message || "error")));
+    } else {
+      cancelOrder(o.id);
+    }
+  };
+
   return (
     <div className="tp-root">
       {/* Header / stats */}
@@ -669,18 +846,35 @@ function TradePage({ embedded, onNavigate }) {
         </div>
         <div className="tp-stat">
           <span className="tp-stat-label">24h high</span>
-          <span className="tp-stat-val">{tpFmt(stats.hi)}</span>
+          <span className="tp-stat-val">{tpFmt(liveTicker && liveTicker.high > 0 ? liveTicker.high : stats.hi)}</span>
         </div>
         <div className="tp-stat">
           <span className="tp-stat-label">24h low</span>
-          <span className="tp-stat-val">{tpFmt(stats.lo)}</span>
+          <span className="tp-stat-val">{tpFmt(liveTicker && liveTicker.low > 0 ? liveTicker.low : stats.lo)}</span>
         </div>
         <div className="tp-stat">
           <span className="tp-stat-label">24h volume</span>
-          <span className="tp-stat-val">{fmtUSD(stats.vol, true)}</span>
+          <span className="tp-stat-val">{fmtUSD(liveTicker && liveTicker.volume > 0 ? liveTicker.volume * price : stats.vol, true)}</span>
         </div>
 
-        <div style={{ position: "relative", marginLeft: "auto" }} ref={alertMenuRef}>
+        <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <button
+            className={"tp-live-btn" + (live ? " tp-live-btn--on" : "")}
+            onClick={() => window.HxApi.setLive(!live)}
+            title={live ? "Real exchange data from api.hollaex.com — click to switch to simulation" : "Simulated data — click to switch to the live exchange"}>
+            <span className="tp-live-dot" /> {live ? "LIVE" : "SIM"}
+          </button>
+          {live && (authed ? (
+            <div className="tp-acct">
+              <span className="tp-acct-email">{(liveUser && liveUser.email) || "signed in"}</span>
+              <button className="tp-acct-out" onClick={() => window.HxApi.logout()}>Sign out</button>
+            </div>
+          ) : (
+            <button className="tp-acct-in" onClick={() => { setLoginErr(""); setLoginOpen(true); }}>Sign in</button>
+          ))}
+        </div>
+
+        <div style={{ position: "relative" }} ref={alertMenuRef}>
           <button className="tp-alert-btn" style={{ marginLeft: 0 }} onClick={() => { setAlertMenuOpen(o => !o); setAlertPrice(price.toFixed(tpDecimals(price))); }}>
             <span aria-hidden>🔔</span> Alerts
             {alerts.length > 0 && <span className="tp-alert-badge">{alerts.length}</span>}
@@ -723,7 +917,10 @@ function TradePage({ embedded, onNavigate }) {
         </div>
 
         <div className="tp-panel tp-book-panel">
-          <div className="tp-panel-title">Order book</div>
+          <div className="tp-panel-title">
+            Order book
+            {live && <span className={"tp-src-badge " + (liveBook ? "tp-src-badge--live" : "tp-src-badge--sim")}>{liveBook ? "LIVE" : "SIM"}</span>}
+          </div>
           <div className="tp-book">
             <div className="tp-book-head"><span>Price</span><span style={{ textAlign: "right" }}>Size</span></div>
             {asks.slice().reverse().map((r, i) => (
@@ -749,14 +946,17 @@ function TradePage({ embedded, onNavigate }) {
         </div>
 
         <div className="tp-panel tp-trades-panel">
-          <div className="tp-panel-title">Recent trades</div>
+          <div className="tp-panel-title">
+            Recent trades
+            {live && <span className={"tp-src-badge " + (liveTrades ? "tp-src-badge--live" : "tp-src-badge--sim")}>{liveTrades ? "LIVE" : "SIM"}</span>}
+          </div>
           <div className="tp-trades">
             <div className="tp-book-head" style={{ gridTemplateColumns: "1fr auto auto" }}>
               <span>Price</span><span>Size</span><span style={{ textAlign: "right" }}>Time</span>
             </div>
-            {trades.length === 0 && window.EmptyState
+            {tradeRows.length === 0 && window.EmptyState
               ? React.createElement(window.EmptyState, { compact: true, icon: "⏱", title: "Waiting for trades", message: "Live fills appear here." })
-              : trades.map(t => (
+              : tradeRows.map(t => (
                 <div key={t.id} className={"tp-trade-row" + (t.usd >= TP_WHALE_USD ? " tp-trade-row--whale" : "")}>
                   <span className={"tp-trade-price--" + t.side}>
                     {tpFmt(t.price)}
@@ -825,16 +1025,23 @@ function TradePage({ embedded, onNavigate }) {
             <span className="tp-total-val">{totalUsd > 0 ? fmtUSD(totalUsd) : "—"}</span>
           </div>
 
-          <button className={"tp-submit tp-submit--" + side} onClick={placeOrder} disabled={amt <= 0}>
-            {side === "buy" ? `Buy ${pair}` : `Sell ${pair}`}
-          </button>
+          {live && !authed ? (
+            <button className="tp-submit tp-submit--buy" onClick={() => { setLoginErr(""); setLoginOpen(true); }}>
+              Sign in to trade live
+            </button>
+          ) : (
+            <button className={"tp-submit tp-submit--" + side} onClick={placeOrder} disabled={amt <= 0}>
+              {side === "buy" ? `Buy ${pair}` : `Sell ${pair}`}{live ? " · live" : ""}
+            </button>
+          )}
           <div className="tp-ticket-err">{ticketErr}</div>
         </div>
 
         <div className="tp-panel">
           <div className="tp-orders-tabs">
             <button className={"tp-orders-tab" + (ordersTab === "open" ? " tp-orders-tab--on" : "")} onClick={() => setOrdersTab("open")}>
-              Open orders<span className="tp-orders-count">({openOrders.length})</span>
+              Open orders<span className="tp-orders-count">({openRows.length})</span>
+              {live && authed && <span className="tp-src-badge tp-src-badge--live">LIVE</span>}
             </button>
             <button className={"tp-orders-tab" + (ordersTab === "history" ? " tp-orders-tab--on" : "")} onClick={() => setOrdersTab("history")}>
               History<span className="tp-orders-count">({orderHistory.length})</span>
@@ -845,7 +1052,7 @@ function TradePage({ embedded, onNavigate }) {
             <span>Side</span><span>Type</span><span>Price</span><span>Amount</span><span className="tp-order-col-total">Total</span><span style={{ textAlign: "right" }}>{ordersTab === "open" ? "" : "Status"}</span>
           </div>
 
-          {(ordersTab === "open" ? openOrders : orderHistory.slice(0, 12)).map(o => (
+          {(ordersTab === "open" ? openRows : orderHistory.slice(0, 12)).map(o => (
             <div key={o.id} className="tp-order-row">
               <span className={"tp-order-side--" + o.side}>{o.side.toUpperCase()}</span>
               <span style={{ color: "rgba(255,255,255,.45)", textTransform: "capitalize" }}>{o.type}</span>
@@ -853,14 +1060,14 @@ function TradePage({ embedded, onNavigate }) {
               <span className="tp-order-num">{fmtBal(o.amount, 6)} {o.pair}</span>
               <span className="tp-order-num tp-order-col-total">{fmtUSD(o.price * o.amount)}</span>
               {ordersTab === "open" ? (
-                <button className="tp-order-cancel" onClick={() => cancelOrder(o.id)}>Cancel</button>
+                <button className="tp-order-cancel" onClick={() => cancelOrderRow(o)}>Cancel</button>
               ) : (
                 <span className={"tp-order-status tp-order-status--" + o.status} style={{ textAlign: "right" }}>{o.status}</span>
               )}
             </div>
           ))}
 
-          {(ordersTab === "open" ? openOrders : orderHistory).length === 0 && window.EmptyState &&
+          {(ordersTab === "open" ? openRows : orderHistory).length === 0 && window.EmptyState &&
             React.createElement(window.EmptyState, {
               icon: ordersTab === "open" ? "◷" : "≡",
               title: ordersTab === "open" ? "No open orders" : "No orders yet",
@@ -872,6 +1079,37 @@ function TradePage({ embedded, onNavigate }) {
       </div>
 
       {toast && <div className={"tp-toast tp-toast--" + toast.side}>{toast.msg}</div>}
+
+      {/* Live exchange sign-in (reuses the shared hxv modal chrome) */}
+      {loginOpen && (
+        <div className="hxv-backdrop" onClick={() => { if (!loginBusy) setLoginOpen(false); }}>
+          <div className="hxv-modal" onClick={e => e.stopPropagation()}>
+            <button className="hxv-close" onClick={() => setLoginOpen(false)}>✕</button>
+            <div className="hxv-title">Live Exchange Sign In</div>
+            <div className="hxv-sub">
+              Sign in with your real HollaEx account ({window.HxApi.BASE.replace(/^https?:\/\//, "").replace(/\/v2$/, "")}).
+              The session token stays in this browser only.
+            </div>
+            <div style={{ marginTop: 16, display: "flex", flexDirection: "column", gap: 8 }}>
+              <input className="tp-input" type="email" placeholder="Email" autoFocus
+                value={loginEmail} style={{ paddingRight: 12 }}
+                onChange={e => setLoginEmail(e.target.value)} />
+              <input className="tp-input" type="password" placeholder="Password"
+                value={loginPassword} style={{ paddingRight: 12 }}
+                onChange={e => setLoginPassword(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter") doLogin(); }} />
+              <input className="tp-input" type="text" inputMode="numeric" placeholder="2FA code (only if enabled)"
+                value={loginOtp} style={{ paddingRight: 12 }}
+                onChange={e => setLoginOtp(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter") doLogin(); }} />
+              <button className="tp-submit tp-submit--buy" onClick={doLogin} disabled={loginBusy} style={{ marginTop: 2 }}>
+                {loginBusy ? "Signing in…" : "Sign in"}
+              </button>
+              <div className="tp-ticket-err">{loginErr}</div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

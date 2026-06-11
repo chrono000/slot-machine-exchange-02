@@ -291,10 +291,54 @@ window.HxMarket = (function () {
   var listeners = new Set();
   var timer = null;
 
-  function tick() {
-    if (document.hidden) return;
+  // ── Live mode (HxApi) ──
+  // Coins present on the real exchange get their price from /tickers polls
+  // (~7s) and stop random-walking; coins the exchange doesn't list keep
+  // simulating so the UI stays fully populated either way.
+  var liveSymbols = {};
+  var liveTickers = {};
+  var liveFetching = false;
+  var liveTickCount = 0;
+
+  function applyLiveTickers(data) {
     Object.keys(prices).forEach(function (t) {
       if (t === "USDT") return;
+      var tk = data[t.toLowerCase() + "-usdt"];
+      if (!tk || !(tk.last > 0)) return;
+      var old = prices[t];
+      prices[t] = tk.last;
+      liveSymbols[t] = true;
+      liveTickers[t] = tk;
+      dirs[t] = tk.last > old ? "up" : tk.last < old ? "down" : null;
+      if (tk.open > 0) open24h[t] = tk.open;
+      var h = history[t];
+      h.push(tk.last);
+      if (h.length > HISTORY_LEN) h.shift();
+      if (window.MOCK_CHANGES && typeof window.MOCK_CHANGES[t] === "number") {
+        window.MOCK_CHANGES[t] = (prices[t] / open24h[t] - 1) * 100;
+      }
+    });
+    listeners.forEach(function (fn) { try { fn(api); } catch (e) {} });
+  }
+
+  function tick() {
+    if (document.hidden) return;
+    var live = window.HxApi && window.HxApi.isLive();
+    if (live) {
+      liveTickCount += 1;
+      if (!liveFetching && liveTickCount % 2 === 1) {
+        liveFetching = true;
+        window.HxApi.getTickers()
+          .then(applyLiveTickers)
+          .catch(function () {})
+          .then(function () { liveFetching = false; });
+      }
+    } else if (Object.keys(liveSymbols).length) {
+      liveSymbols = {};
+    }
+    Object.keys(prices).forEach(function (t) {
+      if (t === "USDT") return;
+      if (live && liveSymbols[t]) { dirs[t] = null; return; }
       var old = prices[t];
       if (!old) return;
       // Random walk with a gentle pull back toward the base price so the
@@ -319,6 +363,10 @@ window.HxMarket = (function () {
     getPrice: function (t) { return prices[t] || 0; },
     getDir: function (t) { return dirs[t] || null; },
     getDirs: function () { return Object.assign({}, dirs); },
+    // True once this coin's price is coming from the real exchange feed
+    isLiveData: function (t) { return !!liveSymbols[t]; },
+    // Latest raw exchange ticker (open/high/low/last/volume) or null
+    getLiveTicker: function (t) { return liveTickers[t] || null; },
     getChange: function (t) {
       if (prices[t] && open24h[t]) return (prices[t] / open24h[t] - 1) * 100;
       return (window.MOCK_CHANGES && window.MOCK_CHANGES[t]) || 0;
@@ -338,6 +386,148 @@ window.HxMarket = (function () {
         listeners.delete(fn);
         if (listeners.size === 0 && timer) { clearInterval(timer); timer = null; }
       };
+    },
+  };
+  return api;
+})();
+
+// ═══════════════════════════════════════════════════════════════════
+// HxApi — live HollaEx exchange client (api.hollaex.com/v2)
+// ───────────────────────────────────────────────────────────────────
+// Mirrors the Exchange Lite semantics: POST /login returns a user JWT
+// (stored as "hollaex_token", the JWT *is* the session), authenticated
+// calls send `Authorization: Bearer <token>`. Direct browser calls —
+// the HollaEx API serves `Access-Control-Allow-Origin: *`. Live mode
+// ("hx_live_mode") makes HxMarket poll real tickers and the Trade page
+// use real orderbook/trades/orders.
+// ═══════════════════════════════════════════════════════════════════
+window.HxApi = (function () {
+  var TOKEN_KEY = "hollaex_token";
+  var LIVE_KEY = "hx_live_mode";
+  var BASE = "https://api.hollaex.com/v2";
+  try { BASE = localStorage.getItem("hx_api_base") || BASE; } catch (e) {}
+
+  var cachedUser = null;
+
+  function getToken() {
+    try { return localStorage.getItem(TOKEN_KEY) || null; } catch (e) { return null; }
+  }
+
+  function request(path, options) {
+    options = options || {};
+    var token = getToken();
+    var headers = Object.assign(
+      {},
+      options.body ? { "Content-Type": "application/json" } : {},
+      token ? { Authorization: "Bearer " + token } : {},
+      options.headers || {}
+    );
+    return fetch(BASE + path, Object.assign({}, options, { headers: headers })).then(function (res) {
+      return res.json().catch(function () { return {}; }).then(function (data) {
+        if (!res.ok) {
+          var msg = (data && (data.message || data.error)) || res.statusText || "Request failed";
+          var err = new Error(msg);
+          err.status = res.status;
+          throw err;
+        }
+        return data;
+      });
+    });
+  }
+
+  var api = {
+    BASE: BASE,
+    request: request,
+    isLive: function () {
+      try { return localStorage.getItem(LIVE_KEY) === "1"; } catch (e) { return false; }
+    },
+    setLive: function (on) {
+      try { localStorage.setItem(LIVE_KEY, on ? "1" : "0"); } catch (e) {}
+      window.dispatchEvent(new Event("hx-live-change"));
+    },
+    isAuthed: function () { return !!getToken(); },
+    getCachedUser: function () { return cachedUser; },
+
+    // POST /login → JWT. Token shape varies across kit versions.
+    login: function (email, password, otpCode) {
+      var body = { email: email, password: password, long_term: true };
+      if (otpCode) body.otp_code = otpCode;
+      return request("/login", {
+        method: "POST",
+        body: JSON.stringify(body),
+        headers: { "custom-device": "terminal" },
+      }).then(function (res) {
+        var token = res.token
+          || (res.data && res.data.token)
+          || (typeof res.data === "string" ? res.data : null);
+        if (!token) throw new Error("Login succeeded but no token returned");
+        try { localStorage.setItem(TOKEN_KEY, token); } catch (e) {}
+        window.dispatchEvent(new Event("hx-auth-change"));
+        return api.getUser();
+      });
+    },
+    logout: function () {
+      var had = getToken();
+      try { localStorage.removeItem(TOKEN_KEY); } catch (e) {}
+      cachedUser = null;
+      window.dispatchEvent(new Event("hx-auth-change"));
+      if (had) request("/logout").catch(function () {});
+    },
+    getUser: function () {
+      return request("/user").then(function (u) { cachedUser = u; return u; });
+    },
+
+    // Public market data
+    getConstants: function () { return request("/constants"); },
+    getTickers: function () { return request("/tickers"); },
+    getOrderbook: function (symbol) { return request("/orderbook?symbol=" + encodeURIComponent(symbol)); },
+    getPublicTrades: function (symbol) { return request("/trades?symbol=" + encodeURIComponent(symbol)); },
+    getChart: function (symbol, resolution, from, to) {
+      return request("/chart?symbol=" + encodeURIComponent(symbol)
+        + "&resolution=" + encodeURIComponent(resolution)
+        + "&from=" + encodeURIComponent(from) + "&to=" + encodeURIComponent(to));
+    },
+
+    // Balances: flat {btc_balance, btc_available, ...} → {BTC: {balance, available, hold}}
+    getBalance: function () {
+      return request("/user/balance").then(function (raw) {
+        var out = {};
+        Object.keys(raw || {}).forEach(function (k) {
+          var m = k.match(/^([a-z0-9]+)_balance$/);
+          if (!m) return;
+          var sym = m[1];
+          var balance = Number(raw[sym + "_balance"]) || 0;
+          var available = Number(raw[sym + "_available"]);
+          if (!Number.isFinite(available)) available = balance;
+          out[sym.toUpperCase()] = {
+            balance: balance,
+            available: available,
+            hold: Math.max(0, balance - available),
+          };
+        });
+        return out;
+      });
+    },
+
+    // Orders
+    getOrders: function (open) {
+      return request("/orders?open=" + (open === false ? "false" : "true"));
+    },
+    placeOrder: function (o) {
+      return request("/order", { method: "POST", body: JSON.stringify(o) });
+    },
+    cancelOrder: function (orderId) {
+      return request("/order?order_id=" + encodeURIComponent(orderId), { method: "DELETE" });
+    },
+
+    // Quick trade (quote token → execute), for the Convert page later
+    getQuickQuote: function (spendingCurrency, receivingCurrency, spendingAmount) {
+      return request("/quick-trade?spending_currency=" + encodeURIComponent(spendingCurrency)
+        + "&receiving_currency=" + encodeURIComponent(receivingCurrency)
+        + "&spending_amount=" + encodeURIComponent(spendingAmount));
+    },
+    executeQuote: function (quoteToken) {
+      return request("/order/execute", { method: "POST", body: JSON.stringify({ token: quoteToken }) });
     },
   };
   return api;

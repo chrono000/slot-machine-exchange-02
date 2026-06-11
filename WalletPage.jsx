@@ -2794,6 +2794,42 @@ export default function WalletPage({ embedded = false, onNavigate, initialCoin, 
     return window.HxMarket.subscribe((m) => setRates(m.getRates()));
   }, []);
 
+  // Live exchange mode + signed in → show real balances from /user/balance
+  // (available amounts; refreshed on auth/live changes and every 20s)
+  useEffect(() => {
+    let stopped = false;
+    let intervalId = null;
+    const loadReal = () => {
+      if (!(window.HxApi && window.HxApi.isLive() && window.HxApi.isAuthed())) return;
+      window.HxApi.getBalance().then(real => {
+        if (stopped) return;
+        setBalances(prev => {
+          const next = { ...prev };
+          Object.keys(COINS).forEach(t => {
+            next[t] = real[t] ? real[t].available : 0;
+          });
+          return next;
+        });
+      }).catch(() => {});
+    };
+    const sync = () => {
+      if (intervalId) { clearInterval(intervalId); intervalId = null; }
+      if (window.HxApi && window.HxApi.isLive() && window.HxApi.isAuthed()) {
+        loadReal();
+        intervalId = setInterval(loadReal, 20000);
+      }
+    };
+    sync();
+    window.addEventListener("hx-live-change", sync);
+    window.addEventListener("hx-auth-change", sync);
+    return () => {
+      stopped = true;
+      if (intervalId) clearInterval(intervalId);
+      window.removeEventListener("hx-live-change", sync);
+      window.removeEventListener("hx-auth-change", sync);
+    };
+  }, []);
+
   // Bar segments: mount at flex:0, expand on next frame
   useEffect(() => {
     if (pageLoading) return;
