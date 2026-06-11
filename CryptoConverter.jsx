@@ -3489,7 +3489,7 @@ export default function CryptoConverter() {
           <div
             key={p.id}
             className={p.id === "markets" ? "cv-page-markets" : "cv-page-wide"}
-            style={{ display: visible ? "block" : "none", animation: getPageAnim(p.id), paddingTop: 0, width: "100%", maxWidth: p.id === "markets" ? "min(1100px, 100%)" : p.id === "wallet" ? "min(860px, 100%)" : 460, margin: "0 auto", paddingLeft: "max(0px, env(safe-area-inset-left))", paddingRight: "max(0px, env(safe-area-inset-right))" }}
+            style={{ display: visible ? "block" : "none", animation: getPageAnim(p.id), paddingTop: 0, width: "100%", maxWidth: p.id === "markets" ? "min(1100px, 100%)" : p.id === "trade" ? "min(1240px, 100%)" : p.id === "wallet" ? "min(860px, 100%)" : 460, margin: "0 auto", paddingLeft: "max(0px, env(safe-area-inset-left))", paddingRight: "max(0px, env(safe-area-inset-right))" }}
           >
             <Comp {...props} />
           </div>
@@ -3599,10 +3599,11 @@ export default function CryptoConverter() {
         </div>
       </div>
 
-      {/* Live market ticker tape — fixed to the bottom edge, visible on every tab */}
+      {/* Live market ticker tape — fixed to the bottom edge, visible on every tab.
+          Clicking a coin opens the Trade terminal on that pair. */}
       <TickerTape onSelect={(t) => {
-        if (CONVERTER_COINS[t] && t !== spendAsset) handleBuyConvert(t);
-        else switchTab("markets");
+        try { localStorage.setItem("hx_trade_pair", t); } catch (e) {}
+        switchTab("trade");
       }} />
 
     </div>
