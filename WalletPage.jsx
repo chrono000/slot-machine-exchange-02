@@ -2618,7 +2618,7 @@ function WalletHistoryModal({ onClose, rates, balances, activity, highlightTxId,
                   : <div style={{ textAlign: "center", padding: "28px 0", fontSize: 12, color: "rgba(255,255,255,.2)" }}>No transactions</div>
               )}
               {rows.map((tx, i) => {
-                const info = COINS[tx.coin];
+                const info = COINS[tx.coin] || { color: "#8b93a7", icon: "◌", decimals: 6 };
                 const sc = TX_STATUS_COLOR[tx.status];
                 const sb = TX_STATUS_BG[tx.status];
                 const statusIcon = tx.status === "confirmed" ? "✓" : tx.status === "pending" ? "◌" : "✕";
@@ -2640,7 +2640,7 @@ function WalletHistoryModal({ onClose, rates, balances, activity, highlightTxId,
                           {TX_CAT_ICON[tx.cat]}
                         </span>
                         <div style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center", gap: 5 }}>
-                          <span style={{ fontSize: 10, fontWeight: 600, color: "rgba(255,255,255,.45)", flexShrink: 0 }}>{catLabel} · {tx.coin}</span>
+                          <span style={{ fontSize: 10, fontWeight: 600, color: "rgba(255,255,255,.45)", flexShrink: 0 }}>{catLabel} · {tx.pair || tx.coin}</span>
                           <span style={{ fontSize: 10, fontWeight: 600, color: "rgba(255,255,255,.65)", fontVariantNumeric: "tabular-nums", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{tx.amount}{tx.detail ? ` ${tx.detail}` : ""}</span>
                           <span style={{ fontSize: 9, color: sc, flexShrink: 0 }}>{statusIcon}</span>
                         </div>
@@ -2671,7 +2671,7 @@ function WalletHistoryModal({ onClose, rates, balances, activity, highlightTxId,
                       {TX_CAT_ICON[tx.cat]}
                     </span>
                     <div className="wl-tx-info">
-                      <div className="wl-tx-label" style={{ fontSize: 12 }}>{catLabel} · {tx.coin}</div>
+                      <div className="wl-tx-label" style={{ fontSize: 12 }}>{catLabel} · {tx.pair || tx.coin}</div>
                       <div className="wl-tx-amount" style={{ fontSize: 13, fontWeight: 700, color: "rgba(255,255,255,.8)" }}>{tx.amount} {tx.coin}{tx.detail ? ` ${tx.detail}` : ""}</div>
                       <TxVerifyLine tx={tx} full />
                       <div style={{ fontSize: 9, color: "rgba(255,255,255,.2)", marginTop: 2 }}>{tx.time}</div>
@@ -2690,7 +2690,7 @@ function WalletHistoryModal({ onClose, rates, balances, activity, highlightTxId,
                       {TX_CAT_ICON[tx.cat]}
                     </span>
                     <div className="wl-tx-info">
-                      <div className="wl-tx-label">{catLabel} · {tx.coin}</div>
+                      <div className="wl-tx-label">{catLabel} · {tx.pair || tx.coin}</div>
                       <div className="wl-tx-amount">{tx.amount} {tx.coin}{tx.detail ? ` ${tx.detail}` : ""}</div>
                       <TxVerifyLine tx={tx} />
                     </div>
@@ -3177,16 +3177,24 @@ export default function WalletPage({ embedded = false, onNavigate, initialCoin, 
         if (stopped) return;
         const rows = [];
         (Array.isArray(tr && tr.data) ? tr.data : []).forEach((r, i) => {
-          const base = String(r.symbol || "").split("-")[0].toUpperCase();
+          // Symbol is base-quote (e.g. "eth-btc"): the trade price is in the
+          // QUOTE currency, not USD — format it as such and convert the row's
+          // USD value through the quote's own USD price.
+          const symParts = String(r.symbol || "").split("-");
+          const base = (symParts[0] || "").toUpperCase();
+          const quote = (symParts[1] || "").toUpperCase();
           const size = Number(r.size) || 0;
           const price = Number(r.price) || 0;
+          const stableQuote = quote === "USDT" || quote === "USDC";
+          const quoteUsd = stableQuote ? 1 : (window.HxMarket.getPrice(quote) || 0);
           rows.push({
             id: `lv-trade-${i}-${r.timestamp || ""}`,
             cat: r.side === "buy" ? "buy" : "sell",
             coin: base,
+            pair: quote ? `${base}/${quote}` : base,
             amount: fmtBal(size, 6),
-            detail: price > 0 ? `@ ${fmtPrice(price)}` : "",
-            usd: addCommas((size * price).toFixed(2)),
+            detail: price > 0 ? `@ ${stableQuote ? fmtPrice(price) : `${fmtDust(price)} ${quote}`}` : "",
+            usd: addCommas((size * price * quoteUsd).toFixed(2)),
             time: window.hxFmtWhen(r.timestamp),
             _at: new Date(r.timestamp || 0).getTime(),
             status: "confirmed",
