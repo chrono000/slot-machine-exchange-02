@@ -18,11 +18,10 @@
   <div id="root"></div>
   <script src="shared.js"></script>
   <script>
-    // Auth gate: redirect to onboarding if not authenticated
-    if (localStorage.getItem("hx_onboarded") !== "1") {
-      if (typeof window.saveReturnUrl === "function") window.saveReturnUrl();
-      window.location.href = "onboarding.html";
-    }
+    // No auth gate: the app opens directly in demo / paper-trading mode so
+    // public deployments (e.g. Vercel) are browsable without signing in.
+    // The onboarding demo lives at onboarding.html; real exchange login is
+    // on the Trade page (LIVE mode → Sign in).
   </script>
   <script>
     const preamble = `

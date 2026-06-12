@@ -12,7 +12,10 @@ npx serve -l 59365 .
 
 > Do **not** use the `-s` flag — this is a multi-page app, not a SPA, and `-s` would rewrite every route to `index.html`.
 
-Then open **http://localhost:59365/onboarding.html** (the app gates on auth).
+Then open **http://localhost:59365/** — the app opens directly in demo
+(paper-trading) mode. The onboarding/login demo lives at `/onboarding.html`,
+and real exchange login (api.hollaex.com) is on the Trade page via the LIVE
+toggle.
 
 `run.bat` does the same thing.
 

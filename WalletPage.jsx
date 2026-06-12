@@ -915,15 +915,18 @@ const SparkChart = React.memo(function SparkChart({ total, period, isUp, onToggl
   // it changes. The cliff guard reseeds if the total jumps >35% in one tick
   // (e.g. demo balances → real balances) so the chart never shows a fake dive.
   const realSeriesRef = useRef(null);
+  const liveAppendedRef = useRef({});
   const seedPeriod = (p) => {
     dataRef.current[p] = (realSeries && realSeries.length > 2)
       ? resampleSeries(realSeries, PERIOD_POINTS[p])
       : genChartData(total, PERIOD_POINTS[p], PERIOD_VOL[p]);
+    liveAppendedRef.current[p] = false;
   };
   useEffect(() => {
     if (realSeriesRef.current !== realSeries) {
       realSeriesRef.current = realSeries;
       dataRef.current = {};
+      liveAppendedRef.current = {};
     }
     if (!dataRef.current[period]) seedPeriod(period);
     if (prevTotal.current !== total) {
@@ -933,8 +936,15 @@ const SparkChart = React.memo(function SparkChart({ total, period, isUp, onToggl
         seedPeriod(period);
       } else {
         const arr = dataRef.current[period];
-        arr.push(total);
-        if (arr.length > PERIOD_POINTS[period] + 40) arr.shift();
+        if (realSeries && realSeries.length > 2) {
+          // Real history: the shape is fixed — live price ticks only move a
+          // single "now" point at the end instead of stacking new points.
+          if (liveAppendedRef.current[period]) arr[arr.length - 1] = total;
+          else { arr.push(total); liveAppendedRef.current[period] = true; }
+        } else {
+          arr.push(total);
+          if (arr.length > PERIOD_POINTS[period] + 40) arr.shift();
+        }
       }
       valueTickedRef.current = true;
     }
@@ -2935,7 +2945,10 @@ export default function WalletPage({ embedded = false, onNavigate, initialCoin, 
       setHighlightTxId(a.txId);
       setModal("activity");
     } else if (a.coin) {
-      openModalDirect("coin", a.coin);
+      // Market move → open the Trade terminal on that coin's chart
+      try { localStorage.setItem("hx_trade_pair", a.coin); } catch (e) {}
+      if (onNavigate) onNavigate("trade");
+      else openModalDirect("coin", a.coin);
     }
   };
   const activePnl    = total * (activePnlPct / 100);
@@ -3031,7 +3044,17 @@ export default function WalletPage({ embedded = false, onNavigate, initialCoin, 
           .map(r => ({ total: Number(r.total), at: new Date(r.created_at || r.timestamp || 0).getTime() }))
           .filter(r => Number.isFinite(r.total) && r.total >= 0 && r.at > 0)
           .sort((a, b) => a.at - b.at);
-        setRealSeries(series.length > 2 ? series : null);
+        // Keep the previous array identity when the data hasn't changed —
+        // a new identity makes the chart reseed (visible shape flicker).
+        setRealSeries(prev => {
+          const next = series.length > 2 ? series : null;
+          if (!next) return null;
+          if (prev && prev.length === next.length
+            && prev[0].at === next[0].at
+            && prev[prev.length - 1].at === next[next.length - 1].at
+            && prev[prev.length - 1].total === next[next.length - 1].total) return prev;
+          return next;
+        });
       }).catch(() => { if (!stopped) setRealSeries(null); });
 
       // Real activity: trades + deposits + withdrawals, newest first
