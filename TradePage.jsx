@@ -487,25 +487,30 @@ function TradePage({ embedded, onNavigate }) {
     return () => { stopped = true; clearInterval(id); };
   }, [live, liveSymbol]);
 
-  // Real balances + open orders once signed in
+  // Real balances come from the shared HxAccount store (null = demo session)
   const [liveBalances, setLiveBalances] = useState(null);
+  useEffect(() => window.HxAccount.subscribe(setLiveBalances), []);
+
+  // Open orders poll here (10s); balances refresh on demand after actions
   const [liveOrders, setLiveOrders] = useState(null);
-  const refreshLiveAccount = useCallback(() => {
-    if (!(window.HxApi.isLive() && window.HxApi.isAuthed())) return;
-    window.HxApi.getBalance().then(setLiveBalances).catch(() => {});
+  const refreshLiveOrders = useCallback(() => {
+    if (!window.hxIsRealSession()) return;
     window.HxApi.getOrders(true)
       .then(d => setLiveOrders(Array.isArray(d && d.data) ? d.data : Array.isArray(d) ? d : []))
       .catch(err => { if (err && err.status === 401) window.HxApi.logout(); });
   }, []);
+  const refreshLiveAccount = useCallback(() => {
+    refreshLiveOrders();
+    window.HxAccount.refresh();
+  }, [refreshLiveOrders]);
   useEffect(() => {
     if (live && authed) {
-      refreshLiveAccount();
-      const id = setInterval(refreshLiveAccount, 10000);
+      refreshLiveOrders();
+      const id = setInterval(refreshLiveOrders, 10000);
       return () => clearInterval(id);
     }
-    setLiveBalances(null);
     setLiveOrders(null);
-  }, [live, authed, refreshLiveAccount]);
+  }, [live, authed, refreshLiveOrders]);
 
   // Login modal
   const [loginOpen, setLoginOpen] = useState(false);

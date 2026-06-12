@@ -367,6 +367,11 @@ window.HxMarket = (function () {
     isLiveData: function (t) { return !!liveSymbols[t]; },
     // Latest raw exchange ticker (open/high/low/last/volume) or null
     getLiveTicker: function (t) { return liveTickers[t] || null; },
+    // Real 24h volume in USD (0 when this coin has no live feed)
+    getVolumeUSD: function (t) {
+      var tk = liveTickers[t];
+      return tk && tk.volume > 0 ? tk.volume * (prices[t] || 0) : 0;
+    },
     getChange: function (t) {
       if (prices[t] && open24h[t]) return (prices[t] / open24h[t] - 1) * 100;
       return (window.MOCK_CHANGES && window.MOCK_CHANGES[t]) || 0;
@@ -557,6 +562,65 @@ window.HxApi = (function () {
     },
   };
   return api;
+})();
+
+// ═══════════════════════════════════════════════════════════════════
+// HxAccount — shared real-balance store
+// ───────────────────────────────────────────────────────────────────
+// One /user/balance poll (20s, only while a real session is active AND at
+// least one page is subscribed) instead of each page polling on its own.
+// Subscribers get the mapped balances object ({BTC: {balance, available,
+// hold}}) or null when the session is demo / signed out — pages restore
+// their demo data on null. Reacts to hx-live-change / hx-auth-change.
+// ═══════════════════════════════════════════════════════════════════
+window.HxAccount = (function () {
+  var POLL_MS = 20000;
+  var balances = null;
+  var listeners = new Set();
+  var timer = null;
+  var inFlight = false;
+
+  function notify() {
+    listeners.forEach(function (fn) { try { fn(balances); } catch (e) {} });
+  }
+
+  function load() {
+    if (!window.hxIsRealSession() || inFlight) return;
+    inFlight = true;
+    window.HxApi.getBalance()
+      .then(function (b) { balances = b; notify(); })
+      .catch(function () {})
+      .then(function () { inFlight = false; });
+  }
+
+  function sync() {
+    if (timer) { clearInterval(timer); timer = null; }
+    if (window.hxIsRealSession()) {
+      load();
+      if (listeners.size) timer = setInterval(load, POLL_MS);
+    } else if (balances) {
+      balances = null;
+      notify();
+    }
+  }
+  window.addEventListener("hx-live-change", sync);
+  window.addEventListener("hx-auth-change", sync);
+
+  return {
+    get: function () { return balances; },
+    refresh: load,
+    // fn(balancesOrNull) — called immediately with the current value, then on
+    // every change. Returns unsubscribe.
+    subscribe: function (fn) {
+      listeners.add(fn);
+      try { fn(balances); } catch (e) {}
+      if (!timer && window.hxIsRealSession()) sync();
+      return function () {
+        listeners.delete(fn);
+        if (!listeners.size && timer) { clearInterval(timer); timer = null; }
+      };
+    },
+  };
 })();
 
 // True when live mode is on AND the user is signed in to the real exchange.

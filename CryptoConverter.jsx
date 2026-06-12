@@ -2312,46 +2312,21 @@ export default function CryptoConverter() {
     Object.fromEntries(Object.entries(CONVERTER_COINS).map(([k, v]) => [k, v.balance]))
   );
 
-  // Live exchange mode + signed in → real balances from /user/balance
-  // (available amounts; refreshed every 20s and on live/auth changes;
-  //  demo balances restored on sign-out)
+  // Real balances via the shared HxAccount store (null = demo session).
+  // Skips the initial null callback so demo buy/sell mutations survive.
   useEffect(() => {
-    let stopped = false;
-    let intervalId = null;
-    let usingReal = false;
-    const loadReal = () => {
-      if (!(window.HxApi && window.HxApi.isLive() && window.HxApi.isAuthed())) return;
-      window.HxApi.getBalance().then(real => {
-        if (stopped) return;
-        usingReal = true;
-        setBalances(prev => {
-          const next = { ...prev };
-          Object.keys(CONVERTER_COINS).forEach(t => {
-            next[t] = real[t] ? real[t].available : 0;
-          });
-          return next;
-        });
-      }).catch(() => {});
-    };
-    const sync = () => {
-      if (intervalId) { clearInterval(intervalId); intervalId = null; }
-      if (window.HxApi && window.HxApi.isLive() && window.HxApi.isAuthed()) {
-        loadReal();
-        intervalId = setInterval(loadReal, 20000);
-      } else if (usingReal) {
-        usingReal = false;
+    let sawReal = false;
+    return window.HxAccount.subscribe(real => {
+      if (real) {
+        sawReal = true;
+        setBalances(Object.fromEntries(
+          Object.keys(CONVERTER_COINS).map(t => [t, real[t] ? real[t].available : 0])
+        ));
+      } else if (sawReal) {
+        sawReal = false;
         setBalances(Object.fromEntries(Object.entries(CONVERTER_COINS).map(([k, v]) => [k, v.balance])));
       }
-    };
-    sync();
-    window.addEventListener("hx-live-change", sync);
-    window.addEventListener("hx-auth-change", sync);
-    return () => {
-      stopped = true;
-      if (intervalId) clearInterval(intervalId);
-      window.removeEventListener("hx-live-change", sync);
-      window.removeEventListener("hx-auth-change", sync);
-    };
+    });
   }, []);
 
   // ── Notification type config ──

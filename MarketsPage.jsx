@@ -66,13 +66,10 @@ function getMarketCap(rates, ticker) {
   return getMkPrice(rates, ticker) * supply;
 }
 
-// 24h volume in USD: real exchange volume (base units × price) when the live
-// feed covers this coin, mock figure otherwise
+// 24h volume in USD: real exchange volume when the live feed covers this
+// coin, mock figure otherwise
 function getMkVolume(ticker) {
-  const M = window.HxMarket;
-  const tk = M.getLiveTicker ? M.getLiveTicker(ticker) : null;
-  if (tk && tk.volume > 0) return tk.volume * (M.getPrice(ticker) || 0);
-  return MOCK_VOLUME[ticker] ?? 0;
+  return window.HxMarket.getVolumeUSD(ticker) || MOCK_VOLUME[ticker] || 0;
 }
 
 function fmtSupply(n) {

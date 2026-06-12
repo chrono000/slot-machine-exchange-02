@@ -2804,7 +2804,6 @@ export default function WalletPage({ embedded = false, onNavigate, initialCoin, 
   const [barExpand, setBarExpand]     = useState(false);
   const [otherHovered, setOtherHovered] = useState(false);
   // Flash
-  const [flashKey, setFlashKey]   = useState(0);
   const [flashDir, setFlashDir]   = useState(null);
   const [balances, setBalances] = useState(() =>
     Object.fromEntries(Object.entries(COINS).map(([t, info]) => [t, info.balance]))
@@ -3009,21 +3008,12 @@ export default function WalletPage({ embedded = false, onNavigate, initialCoin, 
     return window.HxMarket.subscribe((m) => setRates(m.getRates()));
   }, []);
 
-  // Real session (live mode + signed in) → EVERYTHING real: balances and
-  // holds from /user/balance, activity from /user/trades + /user/deposits +
-  // /user/withdrawals, and the portfolio chart from /user/balance-history.
-  // Signing out restores the demo data so the prototype still demos well.
+  // Balances + holds via the shared HxAccount store (null = demo session)
   useEffect(() => {
-    let stopped = false;
-    let intervalId = null;
-    let usingReal = false;
-
-    const loadReal = () => {
-      if (!window.hxIsRealSession()) return;
-      usingReal = true;
-
-      window.HxApi.getBalance().then(real => {
-        if (stopped) return;
+    let sawReal = false;
+    return window.HxAccount.subscribe(real => {
+      if (real) {
+        sawReal = true;
         setBalances(prev => {
           const next = { ...prev };
           Object.keys(COINS).forEach(t => { next[t] = real[t] ? real[t].available : 0; });
@@ -3034,7 +3024,25 @@ export default function WalletPage({ embedded = false, onNavigate, initialCoin, 
           Object.keys(COINS).forEach(t => { h[t] = real[t] ? real[t].hold : 0; });
           return h;
         });
-      }).catch(() => {});
+      } else if (sawReal) {
+        sawReal = false;
+        setBalances(Object.fromEntries(Object.entries(COINS).map(([t, info]) => [t, info.balance])));
+        setRealHolds(null);
+      }
+    });
+  }, []);
+
+  // Wallet-specific real data: activity (trades + deposits + withdrawals)
+  // and the portfolio chart series from /user/balance-history. Signing out
+  // restores the demo data so the prototype still demos well.
+  useEffect(() => {
+    let stopped = false;
+    let intervalId = null;
+    let usingReal = false;
+
+    const loadReal = () => {
+      if (!window.hxIsRealSession()) return;
+      usingReal = true;
 
       // Portfolio value series (oldest → newest, with timestamps) for the chart
       window.HxApi.request("/user/balance-history?limit=100").then(d => {
@@ -3099,8 +3107,11 @@ export default function WalletPage({ embedded = false, onNavigate, initialCoin, 
         (Array.isArray(dep && dep.data) ? dep.data : []).forEach((r, i) => rows.push(mapTx("deposit")(r, i)));
         (Array.isArray(wd && wd.data) ? wd.data : []).forEach((r, i) => rows.push(mapTx("withdraw")(r, i)));
         rows.sort((a, b) => b._at - a._at);
-        if (rows.length) setActivity(rows);
-        else setActivity([]);
+        // Keep the previous array identity when nothing changed so dependent
+        // memos (chart annotations) don't recompute every poll
+        setActivity(prev =>
+          (prev.length === rows.length && (rows.length === 0 || (prev[0] && prev[0].id === rows[0].id)))
+            ? prev : rows);
       });
     };
 
@@ -3111,8 +3122,6 @@ export default function WalletPage({ embedded = false, onNavigate, initialCoin, 
         intervalId = setInterval(loadReal, 20000);
       } else if (usingReal) {
         usingReal = false;
-        setBalances(Object.fromEntries(Object.entries(COINS).map(([t, info]) => [t, info.balance])));
-        setRealHolds(null);
         setRealSeries(null);
         setActivity(MOCK_ACTIVITY);
       }
@@ -3136,27 +3145,34 @@ export default function WalletPage({ embedded = false, onNavigate, initialCoin, 
     return () => cancelAnimationFrame(id);
   }, [pageLoading]);
 
-  // Portfolio value count-up on load
+  // Portfolio value count-up on load. Counts toward a ref so live price
+  // ticks don't cancel/restart the animation (a `total` dep here used to
+  // reset it to zero on every tick); a timer fallback guarantees completion
+  // even if rAF is starved (headless/background tabs).
+  const countTargetRef = useRef(total);
+  countTargetRef.current = total;
   useEffect(() => {
     if (pageLoading || countDone) return;
     if (getAnimScale() === 0) {
-      setCountTotal(total); setCountDone(true);
-    } else {
-      const countDuration = animMs(COUNTUP_MS);
-      const start  = performance.now();
-      const tick = (now) => {
-        // Clamp both ends: under headless/virtual clocks rAF timestamps can
-        // land before `start`, and a negative p makes 2p² explode.
-        const p    = Math.min(Math.max((now - start) / countDuration, 0), 1);
-        const ease = p < 0.5 ? 2*p*p : -1+(4-2*p)*p;
-        setCountTotal(total * ease);
-        if (p < 1) countRef.current = requestAnimationFrame(tick);
-        else { setCountTotal(total); setCountDone(true); }
-      };
-      countRef.current = requestAnimationFrame(tick);
+      setCountTotal(countTargetRef.current); setCountDone(true);
+      return;
     }
-    return () => cancelAnimationFrame(countRef.current);
-  }, [pageLoading, total, countDone]);
+    const countDuration = animMs(COUNTUP_MS);
+    const start  = performance.now();
+    const finish = () => { setCountTotal(countTargetRef.current); setCountDone(true); };
+    const tick = (now) => {
+      // Clamp both ends: under headless/virtual clocks rAF timestamps can
+      // land before `start`, and a negative p makes 2p² explode.
+      const p    = Math.min(Math.max((now - start) / countDuration, 0), 1);
+      const ease = p < 0.5 ? 2*p*p : -1+(4-2*p)*p;
+      setCountTotal(countTargetRef.current * ease);
+      if (p < 1) countRef.current = requestAnimationFrame(tick);
+      else finish();
+    };
+    countRef.current = requestAnimationFrame(tick);
+    const fallback = setTimeout(finish, countDuration + 500);
+    return () => { cancelAnimationFrame(countRef.current); clearTimeout(fallback); };
+  }, [pageLoading, countDone]);
 
   // Flash header on rate tick
   useEffect(() => {
@@ -3164,7 +3180,6 @@ export default function WalletPage({ embedded = false, onNavigate, initialCoin, 
     const dir = total > prevTotal.current ? "up" : "down";
     prevTotal.current = total;
     setFlashDir(dir);
-    setFlashKey(k => k + 1);
     const t = setTimeout(() => setFlashDir(null), animMs(FLASH_MS) + 50);
     return () => clearTimeout(t);
   }, [total]);
