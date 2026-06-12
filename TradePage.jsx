@@ -79,7 +79,7 @@ function tpBookSide(ticker, side, mid, tickN) {
 .tp-panel-title{font-size:10px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:rgba(255,255,255,.35);padding:10px 14px 8px}
 
 /* Header / stats bar */
-.tp-head{display:flex;align-items:center;gap:18px;flex-wrap:wrap;padding:12px 16px;margin-bottom:10px}
+.tp-head{display:flex;align-items:center;gap:18px;flex-wrap:wrap;padding:12px 16px;margin-bottom:10px;position:relative;z-index:80;overflow:visible}
 .tp-pair-btn{display:flex;align-items:center;gap:8px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);border-radius:10px;padding:7px 12px;cursor:pointer;font-family:inherit;color:rgba(255,255,255,.9);font-size:14px;font-weight:700;letter-spacing:.02em;transition:background 140ms}
 .tp-pair-btn:hover{background:rgba(255,255,255,.09)}
 .tp-pair-icon{width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;flex-shrink:0}
