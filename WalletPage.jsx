@@ -1896,7 +1896,7 @@ function DusterModal({ onClose, balances, rates, onConvert }) {
 // ═══════════════════════════════════════════════════════════════════
 // Enlarged Chart Modal
 // ═══════════════════════════════════════════════════════════════════
-function EnlargedChartModal({ onClose, total, defaultPeriod, realSeriesFull = null, annotationsFor = null, onAnnotation = null }) {
+function EnlargedChartModal({ onClose, total, defaultPeriod, realSeriesFull = null, annotationsFor = null, onAnnotation = null, eventsOn = false, onToggleEvents = null }) {
   const [period, setPeriod] = useState(defaultPeriod || "7D");
   const series = useMemo(() => filterSeriesByPeriod(realSeriesFull, period), [realSeriesFull, period]);
   // Actual start timestamp of the visible window (real data) for date labels
@@ -1924,11 +1924,21 @@ function EnlargedChartModal({ onClose, total, defaultPeriod, realSeriesFull = nu
           </div>
           <button className="wl-modal-close" onClick={onClose}>✕</button>
         </div>
-        <div className="wl-big-chart-tabs">
-          {PERIODS.map(p => (
-            <button key={p} className={"wl-period-btn" + (period === p ? " wl-period-btn--active" : "")}
-              onClick={() => setPeriod(p)}>{p}</button>
-          ))}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+          <div className="wl-big-chart-tabs">
+            {PERIODS.map(p => (
+              <button key={p} className={"wl-period-btn" + (period === p ? " wl-period-btn--active" : "")}
+                onClick={() => setPeriod(p)}>{p}</button>
+            ))}
+          </div>
+          {realSeriesFull && onToggleEvents && (
+            <button className={"wl-evt-toggle" + (eventsOn ? " wl-evt-toggle--on" : "")}
+              style={{ marginBottom: 14 }}
+              title={eventsOn ? "Hide event tags on the chart" : "Show event tags on the chart"}
+              onClick={onToggleEvents}>
+              ◆ EVENTS
+            </button>
+          )}
         </div>
         <div style={{ borderRadius: 10, overflow: "hidden", background: "#0d0814", border: "1px solid rgba(255,255,255,.06)" }}>
           <SparkChart total={total} period={period} isUp={isUp} realSeries={series}
@@ -3453,6 +3463,7 @@ export default function WalletPage({ embedded = false, onNavigate, initialCoin, 
       {showBigChart && (
         <EnlargedChartModal onClose={() => setShowBigChart(false)} total={total} defaultPeriod="3M"
           realSeriesFull={realSeries} annotationsFor={annotationsFor}
+          eventsOn={chartEvents} onToggleEvents={toggleChartEvents}
           onAnnotation={(a) => { setShowBigChart(false); handleChartAnnotation(a); }} />
       )}
       {modal && (
