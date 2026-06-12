@@ -245,6 +245,17 @@ body{background:#121218;font-family:'JetBrains Mono',ui-monospace,monospace;colo
 .wl-chart-section{background:#131119;border:1px solid rgba(255,255,255,.06);border-radius:14px;overflow:hidden;margin-bottom:10px}
 .wl-chart-topbar{display:flex;align-items:center;justify-content:space-between;padding:8px 10px 4px;gap:8px}
 .wl-chart-canvas{display:block;width:100%;height:130px}
+/* Chart event tags (sharp-move annotations) */
+.wl-evt{position:absolute;top:0;bottom:0;width:0;pointer-events:none;z-index:3}
+.wl-evt-line{position:absolute;left:0;bottom:6px;width:0;border-left:1px dashed rgba(255,255,255,.2)}
+.wl-evt-tag{position:absolute;left:0;display:inline-flex;align-items:center;gap:5px;white-space:nowrap;font-family:inherit;font-size:9px;font-weight:600;letter-spacing:.03em;padding:2px 7px;border-radius:6px;background:rgba(13,11,20,.94);border:1px solid rgba(255,255,255,.14);color:rgba(255,255,255,.75);pointer-events:auto;cursor:pointer;transition:all 130ms}
+.wl-evt-tag:hover{border-color:rgba(255,255,255,.32);color:#fff}
+.wl-evt-tag--up{box-shadow:inset 2px 0 0 ${COLOR_UP}}
+.wl-evt-tag--down{box-shadow:inset 2px 0 0 ${COLOR_DOWN}}
+.wl-evt-view{color:rgba(110,160,255,.9);text-decoration:underline;font-weight:700}
+.wl-evt-toggle{height:24px;padding:0 8px;border-radius:7px;border:1px solid rgba(255,255,255,.1);background:transparent;color:rgba(255,255,255,.3);font-family:inherit;font-size:9px;font-weight:700;letter-spacing:.05em;cursor:pointer;transition:all 130ms}
+.wl-evt-toggle:hover{color:rgba(255,255,255,.6)}
+.wl-evt-toggle--on{background:rgba(110,160,255,.1);border-color:rgba(110,160,255,.35);color:rgba(110,160,255,.9)}
 /* Desktop: container widens, so give the chart more height for a better aspect ratio */
 @media(min-width:600px){.wl-chart-canvas{height:200px}}
 .wl-period-row{display:flex;align-items:center;gap:2px}
@@ -701,11 +712,59 @@ const PERIOD_VOL    = { "7D": 0.012, "1M": 0.035, "3M": 0.06 };
 // Slice a real {at, total} series down to a period window; falls back to the
 // whole series when the window has too few points (sparse history)
 const PERIOD_DAYS = { "7D": 7, "1M": 30, "3M": 90 };
-function filterSeriesByPeriod(full, period) {
+function filterSeriesObjsByPeriod(full, period) {
   if (!full || full.length < 3) return null;
   const cutoff = Date.now() - (PERIOD_DAYS[period] || 7) * 86400000;
-  const pts = full.filter(r => r.at >= cutoff).map(r => r.total);
-  return pts.length > 2 ? pts : full.map(r => r.total);
+  const pts = full.filter(r => r.at >= cutoff);
+  return pts.length > 2 ? pts : full;
+}
+function filterSeriesByPeriod(full, period) {
+  const objs = filterSeriesObjsByPeriod(full, period);
+  return objs ? objs.map(r => r.total) : null;
+}
+
+// Sharp portfolio moves → chart event tags. A jump that lines up with a real
+// deposit/withdrawal (±30min window) is labeled with that transaction and
+// links to history; otherwise it's a market move attributed to the largest
+// non-stable holding and links to that coin's chart. Top 3 moves by size.
+function computeChartAnnotations(objs, activity, driverCoin) {
+  if (!objs || objs.length < 3) return null;
+  const found = [];
+  for (let i = 1; i < objs.length; i++) {
+    const prev = objs[i - 1], cur = objs[i];
+    const delta = cur.total - prev.total;
+    if (Math.abs(delta) < Math.max(prev.total * 0.06, 25)) continue;
+    const w0 = prev.at - 30 * 60000, w1 = cur.at + 30 * 60000;
+    const match = (activity || []).find(a =>
+      (a.cat === "deposit" || a.cat === "withdraw") && a._at != null && a._at >= w0 && a._at <= w1);
+    found.push({
+      frac: i / (objs.length - 1),
+      delta,
+      dir: delta > 0 ? "up" : "down",
+      kind: match ? "tx" : "market",
+      label: match
+        ? `${match.cat === "deposit" ? "+" : "−"}$${match.usd} ${match.cat}`
+        : `${delta > 0 ? "+" : "−"}${fmtUSD(Math.abs(delta), true)} ${driverCoin ? driverCoin + " move" : "market move"}`,
+      txId: match ? match.id : null,
+      coin: match ? null : driverCoin,
+    });
+  }
+  found.sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta));
+  const seen = new Set();
+  const top = found
+    .filter(a => {
+      if (a.txId == null) return true;
+      if (seen.has(a.txId)) return false;
+      seen.add(a.txId);
+      return true;
+    })
+    .slice(0, 3)
+    .sort((a, b) => a.frac - b.frac);
+  // Stagger tags that would overlap horizontally
+  for (let i = 1; i < top.length; i++) {
+    if (top[i].frac - top[i - 1].frac < 0.18) top[i].row = ((top[i - 1].row || 0) + 1) % 2;
+  }
+  return top.length ? top : null;
 }
 
 // Resample a series to N points (linear pick — fine for chart display)
@@ -716,7 +775,7 @@ function resampleSeries(src, points) {
   return out;
 }
 
-const SparkChart = React.memo(function SparkChart({ total, period, isUp, onToggle, height = null, gridClip = 0.55, realSeries = null }) {
+const SparkChart = React.memo(function SparkChart({ total, period, isUp, onToggle, height = null, gridClip = 0.55, realSeries = null, annotations = null, onAnnotation = null }) {
   const canvasRef = useRef(null);
   const gridCanvasRef = useRef(null);
   const dataRef = useRef({});
@@ -1112,6 +1171,22 @@ const SparkChart = React.memo(function SparkChart({ total, period, isUp, onToggl
           {fmtUSD(hover.value)}
         </div>
       )}
+      {/* Event tags: sharp-move annotations with a dashed drop line. The x
+          position mirrors the canvas plot mapping: frac * (W - 72) + 2. */}
+      {annotations && annotations.map((a, i) => (
+        <div key={i} className="wl-evt" style={{ left: `calc((100% - 72px) * ${a.frac} + 2px)` }}>
+          <span className="wl-evt-line" style={{ top: a.row ? 46 : 27 }} />
+          <button type="button" className={"wl-evt-tag wl-evt-tag--" + a.dir}
+            style={{
+              top: a.row ? 25 : 6,
+              transform: a.frac > 0.82 ? "translateX(-92%)" : a.frac < 0.18 ? "translateX(-8%)" : "translateX(-50%)",
+            }}
+            onClick={e => { e.stopPropagation(); if (onAnnotation) onAnnotation(a); }}
+            title={a.kind === "tx" ? "Open in history" : (a.coin ? `Open ${a.coin} chart` : "Market move")}>
+            {a.label} <span className="wl-evt-view">view</span>
+          </button>
+        </div>
+      ))}
     </div>
   );
 });
@@ -1679,6 +1754,8 @@ function DusterModal({ onClose, balances, rates, onConvert }) {
   const targetReceived = totalUsd / targetRate;
 
   const [phase, setPhase] = useState("review"); // "review" | "converting" | "done"
+  const [dustErr, setDustErr] = useState("");
+  const isReal = window.hxIsRealSession();
   const convertTimerRef = useRef(null);
   const closeTimerRef   = useRef(null);
   // Snapshot at the moment of conversion — the parent's `balances` will zero
@@ -1694,6 +1771,24 @@ function DusterModal({ onClose, balances, rates, onConvert }) {
     if (phase !== "review" || !items.length) return;
     resultRef.current = { targetReceived, totalUsd, items };
     setPhase("converting");
+    setDustErr("");
+
+    // Real session: the exchange executes the dust conversion; the final
+    // asset/amount are exchange-determined. Refresh real balances after.
+    if (isReal) {
+      window.HxApi.dustConvert(items.map(it => it.ticker.toLowerCase()))
+        .then(() => {
+          setPhase("done");
+          window.dispatchEvent(new Event("hx-live-change"));
+          closeTimerRef.current = setTimeout(() => onClose(), 1800);
+        })
+        .catch(e => {
+          setDustErr(e.message || "Dust conversion failed");
+          setPhase("review");
+        });
+      return;
+    }
+
     convertTimerRef.current = setTimeout(() => {
       setPhase("done");
       onConvert(resultRef.current);
@@ -1723,7 +1818,7 @@ function DusterModal({ onClose, balances, rates, onConvert }) {
             Converted {resultRef.current.items.length} coin{resultRef.current.items.length > 1 ? "s" : ""}
           </div>
           <div style={{ fontSize: 12, color: COLOR_UP, marginTop: 6, fontVariantNumeric: "tabular-nums" }}>
-            + {fmtDust(resultRef.current.targetReceived)} {DUST_TARGET}
+            {isReal ? `≈ ${fmtUSD(resultRef.current.totalUsd)} — balances updating…` : `+ ${fmtDust(resultRef.current.targetReceived)} ${DUST_TARGET}`}
           </div>
         </div>
       )}
@@ -1767,8 +1862,13 @@ function DusterModal({ onClose, balances, rates, onConvert }) {
             </div>
 
             <div className="wl-duster-note">
-              Consolidate all small amounts into Tether ({DUST_TARGET}) automatically.
+              {isReal
+                ? "Executed by the exchange — the final asset and received amount are determined at execution."
+                : `Consolidate all small amounts into Tether (${DUST_TARGET}) automatically.`}
             </div>
+            {dustErr && (
+              <div style={{ fontSize: 11, color: "rgba(248,113,113,.85)", textAlign: "center", padding: "4px 0 8px" }}>{dustErr}</div>
+            )}
 
             <div className="wl-duster-action">
               <button className="wl-duster-action-btn" onClick={onClose}>Cancel</button>
@@ -1786,7 +1886,7 @@ function DusterModal({ onClose, balances, rates, onConvert }) {
 // ═══════════════════════════════════════════════════════════════════
 // Enlarged Chart Modal
 // ═══════════════════════════════════════════════════════════════════
-function EnlargedChartModal({ onClose, total, defaultPeriod, realSeriesFull = null }) {
+function EnlargedChartModal({ onClose, total, defaultPeriod, realSeriesFull = null, annotationsFor = null, onAnnotation = null }) {
   const [period, setPeriod] = useState(defaultPeriod || "7D");
   const series = useMemo(() => filterSeriesByPeriod(realSeriesFull, period), [realSeriesFull, period]);
   // Actual start timestamp of the visible window (real data) for date labels
@@ -1822,6 +1922,7 @@ function EnlargedChartModal({ onClose, total, defaultPeriod, realSeriesFull = nu
         </div>
         <div style={{ borderRadius: 10, overflow: "hidden", background: "#0d0814", border: "1px solid rgba(255,255,255,.06)" }}>
           <SparkChart total={total} period={period} isUp={isUp} realSeries={series}
+            annotations={annotationsFor ? annotationsFor(period) : null} onAnnotation={onAnnotation}
             height={Math.min(600, Math.max(280, Math.round(window.innerHeight * 0.55)))}
             gridClip={0.8} />
         </div>
@@ -2790,10 +2891,53 @@ export default function WalletPage({ embedded = false, onNavigate, initialCoin, 
   // Real session with history → slice the series to the selected period and
   // compute PnL from it; demo % otherwise. Memoized so the chart's reseed
   // check (reference identity) doesn't fire on every render.
-  const chartSeries = useMemo(() => filterSeriesByPeriod(realSeries, period), [realSeries, period]);
+  const chartObjs = useMemo(() => filterSeriesObjsByPeriod(realSeries, period), [realSeries, period]);
+  const chartSeries = useMemo(() => (chartObjs ? chartObjs.map(r => r.total) : null), [chartObjs]);
   const activePnlPct = (chartSeries && chartSeries.length > 1 && chartSeries[0] > 0)
     ? ((total - chartSeries[0]) / chartSeries[0]) * 100
     : (PERIOD_PNL_PCT[period] || 0);
+
+  // ── Chart event tags (sharp moves annotated on the portfolio chart) ──
+  const [chartEvents, setChartEvents] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("hx_settings") || "{}").chartEvents !== false; } catch (e) { return true; }
+  });
+  const toggleChartEvents = () => {
+    setChartEvents(v => {
+      const next = !v;
+      try {
+        const s = JSON.parse(localStorage.getItem("hx_settings") || "{}");
+        s.chartEvents = next;
+        localStorage.setItem("hx_settings", JSON.stringify(s));
+      } catch (e) {}
+      return next;
+    });
+  };
+  // Market moves get attributed to the largest non-stable holding
+  const driverCoin = useMemo(() => {
+    let best = null, bestUsd = 0;
+    Object.keys(COINS).forEach(t => {
+      if (t === "USDT" || t === "USDC") return;
+      const usd = (balances[t] || 0) * getUSDRate(rates, t);
+      if (usd > bestUsd) { bestUsd = usd; best = t; }
+    });
+    return best;
+  }, [balances, rates]);
+  const chartAnnotations = useMemo(
+    () => (chartEvents ? computeChartAnnotations(chartObjs, activity, driverCoin) : null),
+    [chartEvents, chartObjs, activity, driverCoin]
+  );
+  const annotationsFor = useCallback(
+    (p) => (chartEvents ? computeChartAnnotations(filterSeriesObjsByPeriod(realSeries, p), activity, driverCoin) : null),
+    [chartEvents, realSeries, activity, driverCoin]
+  );
+  const handleChartAnnotation = (a) => {
+    if (a.kind === "tx" && a.txId != null) {
+      setHighlightTxId(a.txId);
+      setModal("activity");
+    } else if (a.coin) {
+      openModalDirect("coin", a.coin);
+    }
+  };
   const activePnl    = total * (activePnlPct / 100);
   const pnlDir       = activePnl > 0.005 ? "up" : activePnl < -0.005 ? "down" : "flat";
 
@@ -3137,6 +3281,13 @@ export default function WalletPage({ embedded = false, onNavigate, initialCoin, 
               {pnlDir === "up" ? "▲" : pnlDir === "down" ? "▼" : "–"}
               {" "}{fmtUSD(Math.abs(activePnl))} ({Math.abs(activePnlPct).toFixed(2)}%)
             </div>
+            {realSeries && (
+              <button className={"wl-evt-toggle" + (chartEvents ? " wl-evt-toggle--on" : "")}
+                title={chartEvents ? "Hide event tags on the chart" : "Show event tags on the chart"}
+                onClick={e => { e.stopPropagation(); toggleChartEvents(); }}>
+                ◆ EVENTS
+              </button>
+            )}
             <div className="wl-period-drop">
               <button className="wl-period-btn wl-period-btn--active" style={{ fontSize: 10 }}
                 onClick={e => { e.stopPropagation(); setShowPeriodDrop(s => !s); }}>
@@ -3154,7 +3305,8 @@ export default function WalletPage({ embedded = false, onNavigate, initialCoin, 
           </div>
           <div onMouseEnter={() => setShowPeriodDrop(false)}>
             <SparkChart total={total} period={period} isUp={pnlDir !== "down"}
-              realSeries={chartSeries} onToggle={openBigChart} />
+              realSeries={chartSeries} annotations={chartAnnotations}
+              onAnnotation={handleChartAnnotation} onToggle={openBigChart} />
           </div>
         </div>
 
@@ -3261,7 +3413,9 @@ export default function WalletPage({ embedded = false, onNavigate, initialCoin, 
       </div>
 
       {showBigChart && (
-        <EnlargedChartModal onClose={() => setShowBigChart(false)} total={total} defaultPeriod="3M" realSeriesFull={realSeries} />
+        <EnlargedChartModal onClose={() => setShowBigChart(false)} total={total} defaultPeriod="3M"
+          realSeriesFull={realSeries} annotationsFor={annotationsFor}
+          onAnnotation={(a) => { setShowBigChart(false); handleChartAnnotation(a); }} />
       )}
       {modal && (
         <div className="wl-overlay" onClick={e => e.target === e.currentTarget && closeAllModals()}>

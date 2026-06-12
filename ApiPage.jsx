@@ -124,6 +124,49 @@ function SecretModal({ keyObj, onClose }) {
   );
 }
 
+// ─── Real verification modal (live exchange) ────────────────────────────────
+// The real API requires BOTH an emailed code and an authenticator (2FA) code
+// for key create/revoke. Opening this modal triggers the confirmation email.
+function RealVerifyModal({ title, onSubmit, onClose, busy, error }) {
+  const [emailCode, setEmailCode] = useState("");
+  const [otpCode, setOtpCode] = useState("");
+  const [emailSent, setEmailSent] = useState(false);
+  useEffect(() => {
+    window.HxApi.requestEmailConfirmation()
+      .then(() => setEmailSent(true))
+      .catch(() => setEmailSent(false));
+  }, []);
+  const canSubmit = emailCode.trim().length > 0 && otpCode.trim().length > 0 && !busy;
+  return (
+    <div className="api-backdrop" onClick={() => !busy && onClose()}>
+      <div className="api-modal" onClick={e => e.stopPropagation()}>
+        <button className="api-modal-close" onClick={onClose}>✕</button>
+        <div className="api-modal-title">{title}</div>
+        <div className="api-modal-sub">
+          {emailSent
+            ? "We emailed a confirmation code to your account email. Enter it with your authenticator code."
+            : "Requesting an email confirmation code… enter it below with your authenticator code."}
+        </div>
+        <div style={{ marginTop: 16, display: "flex", flexDirection: "column", gap: 10 }}>
+          <input className="api-input" inputMode="numeric" placeholder="Email code" autoFocus
+            value={emailCode} onChange={e => setEmailCode(e.target.value)} />
+          <input className="api-input" inputMode="numeric" placeholder="Authenticator (2FA) code"
+            value={otpCode} onChange={e => setOtpCode(e.target.value)}
+            onKeyDown={e => { if (e.key === "Enter" && canSubmit) onSubmit(emailCode.trim(), otpCode.trim()); }} />
+          <button className="api-btn api-btn--primary" style={{ width: "100%", height: 40 }}
+            disabled={!canSubmit} onClick={() => onSubmit(emailCode.trim(), otpCode.trim())}>
+            {busy ? "Submitting…" : "Confirm"}
+          </button>
+          {error && <div style={{ fontSize: 11, color: "rgba(248,113,113,.85)", textAlign: "center", lineHeight: 1.5 }}>{error}</div>}
+          <div style={{ fontSize: 9, color: "rgba(255,255,255,.3)", textAlign: "center", lineHeight: 1.5 }}>
+            The exchange requires 2FA to be enabled on your account for API key changes.
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Page ────────────────────────────────────────────────────────────────────
 export default function ApiPage({ embedded, onNavigate }) {
   // Chained verify modal (email → authenticator) is shared from shared.js;
@@ -146,6 +189,71 @@ export default function ApiPage({ embedded, onNavigate }) {
   useEffect(() => {
     try { localStorage.setItem(API_KEYS_STORE, JSON.stringify(keys)); } catch (_) {}
   }, [keys]);
+
+  // ── Real session: keys live on the exchange, not in localStorage ──
+  const [real, setReal] = useState(() => window.hxIsRealSession());
+  const [realKeys, setRealKeys] = useState(null);
+  const [realBusy, setRealBusy] = useState(false);
+  const [realErr, setRealErr] = useState("");
+  const refreshRealKeys = () => {
+    if (!window.hxIsRealSession()) return;
+    window.HxApi.getTokens().then(d => {
+      const rows = Array.isArray(d && d.data) ? d.data : Array.isArray(d) ? d : [];
+      setRealKeys(rows.filter(r => !r.revoked).map(r => ({
+        id: r.id,
+        label: r.name || "Unnamed key",
+        apiKey: r.apiKey || r.key || "",
+        scopes: ["read", "trade", "withdraw"].filter(s => r["can_" + s] === true),
+        ips: Array.isArray(r.whitelisted_ips) ? r.whitelisted_ips : [],
+        created: r.created_at ? window.hxFmtWhen(r.created_at) : "—",
+        lastUsed: "—",
+      })));
+    }).catch(() => setRealKeys([]));
+  };
+  useEffect(() => {
+    const sync = () => {
+      const r = window.hxIsRealSession();
+      setReal(r);
+      if (r) refreshRealKeys(); else setRealKeys(null);
+    };
+    sync();
+    window.addEventListener("hx-live-change", sync);
+    window.addEventListener("hx-auth-change", sync);
+    return () => {
+      window.removeEventListener("hx-live-change", sync);
+      window.removeEventListener("hx-auth-change", sync);
+    };
+  }, []);
+
+  // Submit handler for the real verify modal (email code + 2FA code)
+  const onRealVerify = (emailCode, otpCode) => {
+    const action = verify;
+    if (!action) return;
+    setRealBusy(true);
+    setRealErr("");
+    if (action.type === "create") {
+      const ips = ipText.split(/[\s,]+/).map(s => s.trim()).filter(Boolean);
+      window.HxApi.createToken(label.trim() || "Untitled key", otpCode, emailCode, ips)
+        .then(res => {
+          setVerify(null);
+          setReveal({
+            apiKey: res.apiKey || res.key || "(see exchange dashboard)",
+            secret: res.secret || "(not returned)",
+          });
+          setLabel(""); setScopes(["read"]); setIpText("");
+          refreshRealKeys();
+        })
+        .catch(e => setRealErr(e.message || "Failed to create key"))
+        .then(() => setRealBusy(false));
+    } else {
+      window.HxApi.revokeToken(action.id, otpCode, emailCode)
+        .then(() => { setVerify(null); refreshRealKeys(); })
+        .catch(e => setRealErr(e.message || "Failed to revoke key"))
+        .then(() => setRealBusy(false));
+    }
+  };
+
+  const shownKeys = real ? (realKeys || []) : keys;
 
   const toggleScope = (id) =>
     setScopes(prev => prev.includes(id) ? prev.filter(s => s !== id) : [...prev, id]);
@@ -170,19 +278,25 @@ export default function ApiPage({ embedded, onNavigate }) {
   return (
     <div className="api-root">
       <div className="api-head">
-        <div className="api-title">API Keys</div>
+        <div className="api-title">
+          API Keys
+          {real && <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: ".08em", padding: "3px 7px", borderRadius: 5, marginLeft: 10, verticalAlign: "middle", background: "rgba(74,222,128,.12)", color: "#4ade80" }}>LIVE</span>}
+        </div>
         <div className="api-sub">
-          Programmatic access to your HX account. Creating or revoking a key requires
-          email&nbsp;+&nbsp;2FA verification. Secret keys are shown only once.
+          {real
+            ? "Real HMAC keys on your exchange account. Creating or revoking requires an emailed code + your authenticator. Secrets are shown only once."
+            : "Programmatic access to your HX account. Creating or revoking a key requires email + 2FA verification. Secret keys are shown only once."}
         </div>
       </div>
 
       {/* Existing keys */}
       <div className="api-section">
-        <div className="api-section-title">Your keys · {keys.length}</div>
-        {keys.length === 0 ? (
+        <div className="api-section-title">Your keys · {shownKeys.length}</div>
+        {real && realKeys === null ? (
+          <div className="api-empty">Loading your keys…</div>
+        ) : shownKeys.length === 0 ? (
           <div className="api-empty">No API keys yet. Create one below to get started.</div>
-        ) : keys.map(k => (
+        ) : shownKeys.map(k => (
           <div className="api-row" key={k.id}>
             <div style={{ minWidth: 0 }}>
               <div className="api-key-label">{k.label}</div>
@@ -234,6 +348,12 @@ export default function ApiPage({ embedded, onNavigate }) {
           <span>🔒</span>
           <span>You'll confirm with an email code and your authenticator before the key is issued.</span>
         </div>
+        {real && (
+          <div className="api-note api-note--warn">
+            <span>ℹ</span>
+            <span>Live keys are created with the exchange's default permissions — the checkboxes above don't apply yet (permission editing lands in a later update). The IP allowlist <strong>is</strong> applied.</span>
+          </div>
+        )}
 
         <div style={{ padding: "0 16px 14px" }}>
           <button className="api-btn api-btn--primary" style={{ width: "100%", height: 40 }}
@@ -243,13 +363,21 @@ export default function ApiPage({ embedded, onNavigate }) {
         </div>
       </div>
 
-      {verify && (
+      {verify && (real ? (
+        <RealVerifyModal
+          title={verify.type === "create" ? "Create API Key" : "Revoke API Key"}
+          onSubmit={onRealVerify}
+          onClose={() => { if (!realBusy) { setVerify(null); setRealErr(""); } }}
+          busy={realBusy}
+          error={realErr}
+        />
+      ) : (
         <ChainedVerify
           title={verify.type === "create" ? "Create API Key" : "Revoke API Key"}
           onVerified={onVerified}
           onClose={() => setVerify(null)}
         />
-      )}
+      ))}
       {reveal && <SecretModal keyObj={reveal} onClose={() => setReveal(null)} />}
     </div>
   );

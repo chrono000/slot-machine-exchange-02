@@ -520,6 +520,32 @@ window.HxApi = (function () {
       return request("/order?order_id=" + encodeURIComponent(orderId), { method: "DELETE" });
     },
 
+    // Email confirmation code — required alongside the OTP for API-key
+    // create/revoke. GET sends the code to the account email.
+    requestEmailConfirmation: function () { return request("/user/request-email-confirmation"); },
+
+    // HMAC API keys (the ApiPage). Create returns the key + secret ONCE.
+    getTokens: function () { return request("/user/tokens"); },
+    createToken: function (name, otpCode, emailCode, whitelistedIps) {
+      var body = { name: name, otp_code: otpCode, email_code: emailCode };
+      if (whitelistedIps && whitelistedIps.length) body.whitelisted_ips = whitelistedIps;
+      return request("/user/token", { method: "POST", body: JSON.stringify(body) });
+    },
+    revokeToken: function (tokenId, otpCode, emailCode) {
+      return request("/user/token", {
+        method: "DELETE",
+        body: JSON.stringify({ token_id: tokenId, otp_code: otpCode, email_code: emailCode }),
+      });
+    },
+
+    // Dust conversion (small balances → exchange-configured target)
+    dustEstimate: function (assets) {
+      return request("/order/dust/estimate", { method: "POST", body: JSON.stringify({ assets: assets }) });
+    },
+    dustConvert: function (assets) {
+      return request("/order/dust", { method: "POST", body: JSON.stringify({ assets: assets }) });
+    },
+
     // Quick trade (quote token → execute), for the Convert page later
     getQuickQuote: function (spendingCurrency, receivingCurrency, spendingAmount) {
       return request("/quick-trade?spending_currency=" + encodeURIComponent(spendingCurrency)
