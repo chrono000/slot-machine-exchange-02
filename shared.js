@@ -630,6 +630,30 @@ window.hxIsRealSession = function () {
   return !!(window.HxApi && window.HxApi.isLive() && window.HxApi.isAuthed());
 };
 
+// Blockchain explorer URL for a transaction hash. The network (preferred)
+// or coin picks the explorer; returns null when no explorer maps (off-chain
+// exchange trades, internal transfers, demo rows).
+window.hxExplorerTxUrl = function (network, coin, txid) {
+  if (!txid) return null;
+  var EXPLORERS = {
+    btc: "https://mempool.space/tx/", bitcoin: "https://mempool.space/tx/",
+    eth: "https://etherscan.io/tx/", erc20: "https://etherscan.io/tx/", ethereum: "https://etherscan.io/tx/",
+    trx: "https://tronscan.org/#/transaction/", trc20: "https://tronscan.org/#/transaction/",
+    bnb: "https://bscscan.com/tx/", bsc: "https://bscscan.com/tx/", bep20: "https://bscscan.com/tx/",
+    matic: "https://polygonscan.com/tx/", pol: "https://polygonscan.com/tx/", polygon: "https://polygonscan.com/tx/",
+    sol: "https://solscan.io/tx/", solana: "https://solscan.io/tx/",
+    xrp: "https://xrpscan.com/tx/",
+    ada: "https://cardanoscan.io/transaction/",
+    doge: "https://blockchair.com/dogecoin/transaction/",
+    avax: "https://snowtrace.io/tx/",
+    xmr: "https://xmrchain.net/tx/",
+    ltc: "https://blockchair.com/litecoin/transaction/",
+    xlm: "https://stellarchain.io/transactions/",
+  };
+  var base = EXPLORERS[String(network || "").toLowerCase()] || EXPLORERS[String(coin || "").toLowerCase()];
+  return base ? base + encodeURIComponent(txid) : null;
+};
+
 // "2026-06-11T04:45:17.651Z" → "Jun 11 4:45 AM" (for activity rows)
 window.hxFmtWhen = function (iso) {
   try {

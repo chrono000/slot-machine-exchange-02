@@ -2388,6 +2388,52 @@ const WL_TX_TAB_ORDER = ["all", "deposit", "withdraw", "trade"];
 // ═══════════════════════════════════════════════════════════════════
 // Portfolio History Modal
 // ═══════════════════════════════════════════════════════════════════
+// Transaction id line. Click the truncated id to expand it to full length,
+// ⧉ copies the full hash, "Verify ↗" opens the right blockchain explorer
+// for the coin/network. Demo rows (no full txid) just show their short
+// hash; off-chain exchange trades render nothing.
+function TxVerifyLine({ tx, full }) {
+  const [copied, setCopied] = useState(false);
+  const [showFull, setShowFull] = useState(false);
+  const idText = tx.txid || tx.hash;
+  if (!idText) return null;
+  const url = window.hxExplorerTxUrl ? window.hxExplorerTxUrl(tx.network, tx.coin, tx.txid) : null;
+  const truncated = idText.length > 16 && !showFull;
+  const copy = (e) => {
+    e.stopPropagation();
+    if (navigator.clipboard) navigator.clipboard.writeText(tx.txid || tx.hash).catch(() => {});
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1200);
+  };
+  return (
+    <div className="wl-tx-hash" style={{ maxWidth: "none", display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap" }}>
+      <span title={idText.length > 16 ? (showFull ? "Click to collapse" : "Click to show the full id") : undefined}
+        style={{ cursor: idText.length > 16 ? "pointer" : "default", wordBreak: "break-all" }}
+        onClick={e => { e.stopPropagation(); if (idText.length > 16) setShowFull(s => !s); }}>
+        #{truncated ? idText.slice(0, 16) + "…" : idText}
+      </span>
+      <span title="Copy full id" style={{ cursor: "pointer", opacity: .7 }} onClick={copy}>{copied ? "✓" : "⧉"}</span>
+      {full && tx.network && (
+        <span style={{ color: "rgba(255,255,255,.25)", fontSize: 9, letterSpacing: ".05em" }}>{tx.network.toUpperCase()}</span>
+      )}
+      {full && tx.fee > 0 && (
+        <span style={{ color: "rgba(255,255,255,.25)", fontSize: 9 }}>fee {fmtDust(tx.fee)} {tx.feeCoin}</span>
+      )}
+      {url && (
+        <a href={url} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()}
+          style={{ color: "rgba(110,160,255,.85)", textDecoration: "none", fontWeight: 600 }}>
+          Verify ↗
+        </a>
+      )}
+      {full && showFull && tx.address && (
+        <span style={{ flexBasis: "100%", color: "rgba(255,255,255,.3)", fontSize: 9, wordBreak: "break-all" }}>
+          address {tx.address}
+        </span>
+      )}
+    </div>
+  );
+}
+
 function WalletHistoryModal({ onClose, rates, balances, activity, highlightTxId, onHighlightDone }) {
   const [mainTab, setMainTab] = useState("transactions");
   const [showStatement, setShowStatement] = useState(false);
@@ -2397,6 +2443,7 @@ function WalletHistoryModal({ onClose, rates, balances, activity, highlightTxId,
   const [page, setPage] = useState(0);
   const [txLoading, setTxLoading] = useState(true);
   const [txView, setTxView] = useState("minimal"); // "minimal" | "default" | "expanded"
+  const [openTxId, setOpenTxId] = useState(null); // dense view: inline-expanded row
   const txTimer = useRef(null);
 
   // — Tab transition tracking —
@@ -2449,12 +2496,13 @@ function WalletHistoryModal({ onClose, rates, balances, activity, highlightTxId,
   const filtered = txTab === "all" ? activity : activity.filter(tx => TX_TAB_GROUP[tx.cat] === txTab);
   const pages = Math.ceil(filtered.length / pageSize);
   const rows = filtered.slice(page * pageSize, page * pageSize + pageSize);
-  const onTxTab = (t) => { prevTxTab.current = txTab; setTxTab(t); setPage(0); triggerTxLoad(); };
-  const onPage = (delta) => { prevPage.current = page; setPage(p => p + delta); triggerTxLoad(); };
+  const onTxTab = (t) => { prevTxTab.current = txTab; setTxTab(t); setPage(0); setOpenTxId(null); triggerTxLoad(); };
+  const onPage = (delta) => { prevPage.current = page; setPage(p => p + delta); setOpenTxId(null); triggerTxLoad(); };
   const onViewCycle = () => {
     setTxView(v => v === "minimal" ? "default" : v === "default" ? "expanded" : "minimal");
     setViewKey(k => k + 1);
     setPage(0);
+    setOpenTxId(null);
   };
 
   // — Tab transition animation helpers —
@@ -2577,22 +2625,44 @@ function WalletHistoryModal({ onClose, rates, balances, activity, highlightTxId,
                 const catColor = TX_CAT_COLOR[tx.cat] || info.color;
                 const catLabel = TX_CAT_LABEL[tx.cat] || tx.cat;
 
-                // ── Expanded: 9 rows, single-line compact ──
-                if (txView === "expanded") return (
-                  <div key={tx.id} data-tx-id={tx.id} className={"wl-tx-row" + (highlightTxId === tx.id ? " wl-tx-row--highlight" : "")} style={{ padding: "5px 2px", ...getRowStagger(i) }}>
-                    <span className="wl-tx-icon" style={{ width: 22, height: 22, fontSize: 9, flexShrink: 0, background: catColor + "22", color: catColor, border: `1px solid ${catColor}30` }}>
-                      {TX_CAT_ICON[tx.cat]}
-                    </span>
-                    <div style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center", gap: 5 }}>
-                      <span style={{ fontSize: 10, fontWeight: 600, color: "rgba(255,255,255,.45)", flexShrink: 0 }}>{catLabel} · {tx.coin}</span>
-                      <span style={{ fontSize: 10, fontWeight: 600, color: "rgba(255,255,255,.65)", fontVariantNumeric: "tabular-nums", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{tx.amount}{tx.detail ? ` ${tx.detail}` : ""}</span>
-                      <span style={{ fontSize: 9, color: sc, flexShrink: 0 }}>{statusIcon}</span>
+                // ── Expanded: dense single-line rows; click a row to reveal
+                //    the full transaction details inline ──
+                if (txView === "expanded") {
+                  const isOpen = openTxId === tx.id;
+                  return (
+                    <div key={tx.id}>
+                      <div data-tx-id={tx.id}
+                        className={"wl-tx-row" + (highlightTxId === tx.id ? " wl-tx-row--highlight" : "")}
+                        style={{ padding: "5px 2px", cursor: "pointer", ...getRowStagger(i) }}
+                        title={isOpen ? "Hide details" : "Show details"}
+                        onClick={() => setOpenTxId(o => (o === tx.id ? null : tx.id))}>
+                        <span className="wl-tx-icon" style={{ width: 22, height: 22, fontSize: 9, flexShrink: 0, background: catColor + "22", color: catColor, border: `1px solid ${catColor}30` }}>
+                          {TX_CAT_ICON[tx.cat]}
+                        </span>
+                        <div style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center", gap: 5 }}>
+                          <span style={{ fontSize: 10, fontWeight: 600, color: "rgba(255,255,255,.45)", flexShrink: 0 }}>{catLabel} · {tx.coin}</span>
+                          <span style={{ fontSize: 10, fontWeight: 600, color: "rgba(255,255,255,.65)", fontVariantNumeric: "tabular-nums", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{tx.amount}{tx.detail ? ` ${tx.detail}` : ""}</span>
+                          <span style={{ fontSize: 9, color: sc, flexShrink: 0 }}>{statusIcon}</span>
+                        </div>
+                        <div style={{ textAlign: "right", flexShrink: 0, display: "flex", alignItems: "center", gap: 6 }}>
+                          <span style={{ fontSize: 10, fontWeight: 600, fontVariantNumeric: "tabular-nums", color: "rgba(255,255,255,.6)" }}>${tx.usd}</span>
+                          <span style={{ fontSize: 8, color: "rgba(255,255,255,.3)", transform: isOpen ? "rotate(180deg)" : "none", transition: "transform 150ms" }}>▼</span>
+                        </div>
+                      </div>
+                      {isOpen && (
+                        <div style={{ padding: "2px 8px 9px 29px", display: "flex", flexDirection: "column", gap: 3, borderBottom: "1px solid rgba(255,255,255,.04)" }}>
+                          <TxVerifyLine tx={tx} full />
+                          {tx.address && (
+                            <div style={{ fontSize: 9, color: "rgba(255,255,255,.3)", wordBreak: "break-all" }}>address {tx.address}</div>
+                          )}
+                          <div style={{ fontSize: 9, color: "rgba(255,255,255,.25)" }}>
+                            {tx.time} · {TX_STATUS[tx.status]}{tx.detail ? ` · ${tx.detail}` : ""}
+                          </div>
+                        </div>
+                      )}
                     </div>
-                    <div style={{ textAlign: "right", flexShrink: 0 }}>
-                      <span style={{ fontSize: 10, fontWeight: 600, fontVariantNumeric: "tabular-nums", color: "rgba(255,255,255,.6)" }}>${tx.usd}</span>
-                    </div>
-                  </div>
-                );
+                  );
+                }
 
                 // ── Minimal: 4 rows, rich detail ──
                 if (txView === "minimal") return (
@@ -2603,7 +2673,7 @@ function WalletHistoryModal({ onClose, rates, balances, activity, highlightTxId,
                     <div className="wl-tx-info">
                       <div className="wl-tx-label" style={{ fontSize: 12 }}>{catLabel} · {tx.coin}</div>
                       <div className="wl-tx-amount" style={{ fontSize: 13, fontWeight: 700, color: "rgba(255,255,255,.8)" }}>{tx.amount} {tx.coin}{tx.detail ? ` ${tx.detail}` : ""}</div>
-                      <div className="wl-tx-hash" style={{ maxWidth: "none" }}>#{tx.hash}</div>
+                      <TxVerifyLine tx={tx} full />
                       <div style={{ fontSize: 9, color: "rgba(255,255,255,.2)", marginTop: 2 }}>{tx.time}</div>
                     </div>
                     <div className="wl-tx-right">
@@ -2622,7 +2692,7 @@ function WalletHistoryModal({ onClose, rates, balances, activity, highlightTxId,
                     <div className="wl-tx-info">
                       <div className="wl-tx-label">{catLabel} · {tx.coin}</div>
                       <div className="wl-tx-amount">{tx.amount} {tx.coin}{tx.detail ? ` ${tx.detail}` : ""}</div>
-                      <div className="wl-tx-hash">#{tx.hash}</div>
+                      <TxVerifyLine tx={tx} />
                     </div>
                     <div className="wl-tx-right">
                       <div className="wl-tx-usd">${tx.usd}</div>
@@ -3075,7 +3145,9 @@ export default function WalletPage({ embedded = false, onNavigate, initialCoin, 
         });
       }).catch(() => { if (!stopped) setRealSeries(null); });
 
-      // Real activity: trades + deposits + withdrawals, newest first
+      // Real activity: trades + deposits + withdrawals, newest first.
+      // Keep the FULL transaction_id plus network/address/fee so the history
+      // modal can offer copy + a blockchain-explorer verification link.
       const mapTx = (cat) => (r, i) => {
         const coin = String(r.currency || "").toUpperCase();
         const amt = Number(r.amount) || 0;
@@ -3089,7 +3161,12 @@ export default function WalletPage({ embedded = false, onNavigate, initialCoin, 
           time: window.hxFmtWhen(r.created_at),
           _at: new Date(r.created_at || 0).getTime(),
           status: r.status === true ? "confirmed" : (r.rejected || r.dismissed) ? "failed" : "pending",
+          txid: String(r.transaction_id || ""),
           hash: String(r.transaction_id || "").slice(0, 10),
+          network: String(r.network || ""),
+          address: String(r.address || ""),
+          fee: Number(r.fee) || 0,
+          feeCoin: String(r.fee_coin || r.currency || "").toUpperCase(),
         };
       };
       Promise.all([
@@ -3102,16 +3179,20 @@ export default function WalletPage({ embedded = false, onNavigate, initialCoin, 
         (Array.isArray(tr && tr.data) ? tr.data : []).forEach((r, i) => {
           const base = String(r.symbol || "").split("-")[0].toUpperCase();
           const size = Number(r.size) || 0;
+          const price = Number(r.price) || 0;
           rows.push({
             id: `lv-trade-${i}-${r.timestamp || ""}`,
             cat: r.side === "buy" ? "buy" : "sell",
             coin: base,
             amount: fmtBal(size, 6),
-            usd: addCommas((size * (Number(r.price) || 0)).toFixed(2)),
+            detail: price > 0 ? `@ ${fmtPrice(price)}` : "",
+            usd: addCommas((size * price).toFixed(2)),
             time: window.hxFmtWhen(r.timestamp),
             _at: new Date(r.timestamp || 0).getTime(),
             status: "confirmed",
             hash: "",
+            fee: Number(r.fee) || 0,
+            feeCoin: String(r.fee_coin || "").toUpperCase(),
           });
         });
         (Array.isArray(dep && dep.data) ? dep.data : []).forEach((r, i) => rows.push(mapTx("deposit")(r, i)));
